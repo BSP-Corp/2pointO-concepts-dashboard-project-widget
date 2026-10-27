@@ -1,0 +1,154 @@
+// Widget.project_details(string quo_data) — project header extras. Custom API: Widget_Project_Details (GET, quo_data).
+// quo_data: {"project_id":"…"} → customer (live from Client_Name), contacts, owner, team (Project Team grid), pipeline stages
+// (static order from Widget.status_order, with Status record IDs), task / BOQ status orders, and the caller's edit / admin permission.
+map Widget.project_details(string quo_data)
+{
+	response = Map();
+	try 
+	{
+		pidText = ifnull(quo_data.toMap().get("project_id"),"").toString().trim();
+		pid = 0;
+		if(pidText.isNumber())
+		{
+			pid = pidText.toLong();
+		}
+		projRec = Project[ID == pid];
+		if(projRec.count() == 0)
+		{
+			response = {"status":"error","code":"NOT_FOUND","message":"Project not found"};
+		}
+		else
+		{
+			customer = Map();
+			contacts = List();
+			if(projRec.Client_Name != null)
+			{
+				custRec = Customers[ID == projRec.Client_Name];
+				address = "";
+				if(custRec.Billing_Address2 != null)
+				{
+					for each  part in {ifnull(custRec.Billing_Address2.address_line_1,""),ifnull(custRec.Billing_Address2.address_line_2,""),ifnull(custRec.Billing_Address2.district_city,""),ifnull(custRec.Billing_Address2.state_province,"")}
+					{
+						if(part.trim() != "")
+						{
+							address = if(address == "",part.trim(),address + ", " + part.trim());
+						}
+					}
+				}
+				customer = {"ID":custRec.ID.toString(),"Customer_Name":ifnull(custRec.Customer_Name,""),"Email":ifnull(custRec.Email,""),"Phone_Number":ifnull(custRec.Phone_Number,""),"Mobile":ifnull(custRec.Mobile,""),"Address":address};
+				for each  contactRec in Contact_Persons[Customers == projRec.Client_Name]
+				{
+					contacts.add({"ID":contactRec.ID.toString(),"Name":ifnull(contactRec.Name,"").toString(),"Email":ifnull(contactRec.Email,""),"Work_Phone":ifnull(contactRec.Work_Phone,""),"Mobile":ifnull(contactRec.Mobile,""),"Designation":ifnull(contactRec.Designation,"")});
+				}
+			}
+			if(contacts.size() == 0)
+			{
+				for each  contactRec in Contact_Persons[Project == pid]
+				{
+					contacts.add({"ID":contactRec.ID.toString(),"Name":ifnull(contactRec.Name,"").toString(),"Email":ifnull(contactRec.Email,""),"Work_Phone":ifnull(contactRec.Work_Phone,""),"Mobile":ifnull(contactRec.Mobile,""),"Designation":ifnull(contactRec.Designation,"")});
+				}
+			}
+			owner = Map();
+			if(projRec.Project_Manager != null)
+			{
+				ownerRec = Users[ID == projRec.Project_Manager];
+				owner = {"ID":ownerRec.ID.toString(),"Name":ifnull(ownerRec.Name,""),"Role":ifnull(ownerRec.Role,""),"Email":ifnull(ownerRec.Email,"")};
+			}
+			team = List();
+			for each  teamRow in projRec.Pro
+			{
+				if(teamRow.Team_Member != null)
+				{
+					memberRec = Users[ID == teamRow.Team_Member];
+					projectRole = "";
+					if(teamRow.Project_Role != null)
+					{
+						projectRole = ifnull(teamRow.Project_Role.Role,"");
+					}
+					team.add({"ID":memberRec.ID.toString(),"Name":ifnull(memberRec.Name,""),"Role":ifnull(memberRec.Role,""),"Project_Role":projectRole,"Status":ifnull(memberRec.Status,"")});
+				}
+			}
+			// Pipeline in the static order (Widget.status_order); ID = the Status record with that name ("" when none exists)
+			order = thisapp.Widget.status_order();
+			stages = List();
+			for each  stageName in order.get("project")
+			{
+				stageRec = Status[Status_Name == stageName];
+				stageId = "";
+				if(stageRec.count() > 0)
+				{
+					stageId = stageRec.ID.toString();
+				}
+				stages.add({"ID":stageId,"Status_Name":stageName,"anytime":false});
+			}
+			for each  stageName in order.get("anytime")
+			{
+				stageRec = Status[Status_Name == stageName];
+				stageId = "";
+				if(stageRec.count() > 0)
+				{
+					stageId = stageRec.ID.toString();
+				}
+				stages.add({"ID":stageId,"Status_Name":stageName,"anytime":true});
+			}
+			// Edit permission (architecture: the project team updates execution, asset & network fields):
+			// app admin, Users.Role Administrator / Management / Project Manager, this project's Project Manager, or a member
+			// of its Project Team. The login is matched to Users.Email without regard to upper / lower case.
+			isAdmin = zoho.loginuser == zoho.adminuser || zoho.loginuserid.equalsIgnoreCase(zoho.adminuserid);
+			loginEmail = zoho.loginuserid.trim().toLowerCase();
+			loginRec = Users[Email == zoho.loginuserid];
+			if(loginRec.count() == 0)
+			{
+				for each  userRec in Users[Email != ""]
+				{
+					if(ifnull(userRec.Email,"").trim().toLowerCase() == loginEmail)
+					{
+						loginRec = Users[ID == userRec.ID];
+					}
+				}
+			}
+			loginRole = "";
+			loginId = "";
+			if(loginRec.count() > 0)
+			{
+				loginRole = ifnull(loginRec.Role,"");
+				loginId = loginRec.ID.toString();
+			}
+			isAdmin = isAdmin || loginRole == "Administrator";
+			isManager = loginId != "" && ifnull(projRec.Project_Manager,"").toString() == loginId;
+			onTeam = false;
+			for each  memberRow in projRec.Pro
+			{
+				if(loginId != "" && ifnull(memberRow.Team_Member,"").toString() == loginId)
+				{
+					onTeam = true;
+				}
+			}
+			// Everyone with access to the Project Widget page may edit (Creator page permissions decide access)
+			canEdit = true;
+			editReason = "";
+			if(!canEdit)
+			{
+				if(loginId == "")
+				{
+					editReason = "Read only: your login (" + zoho.loginuserid + ") has no record in Users. Add it to Users (Email) to edit.";
+				}
+				else
+				{
+					editReason = "Read only: you are not this project's Project Manager or on its Project Team, and your Users role (" + loginRole + ") is not Administrator, Management or Project Manager.";
+				}
+			}
+			userName = zoho.loginuser;
+			if(loginRec.count() > 0 && ifnull(loginRec.Name,"") != "")
+			{
+				userName = loginRec.Name;
+			}
+			response = {"status":"success","user":userName,"customer":customer,"contacts":contacts,"owner":owner,"team":team,"stages":stages,"task_order":order.get("task"),"boq_order":order.get("boq"),"can_edit":canEdit,"is_admin":isAdmin,"edit_reason":editReason};
+		}
+	}
+	catch (e)
+	{
+		response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+	}
+	return response;
+}

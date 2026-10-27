@@ -1,0 +1,590 @@
+// Widget.project_task_update(string quo_data) — inline edits. Custom API: Widget_Project_Task_Update (PUT, quo_data).
+// Task:       {"project_id","task_id","data":{Task_Name, Task_Description, Task_Start_Date, Task_End_Date, Duration, Actual_Start_Date, Actual_Complete_Date,
+//              Task_Status, Priority, Precent_Complete, Work_Hours, Billing_Type, Parent_Task, Owners:[ids]}}
+// Milestone:  {"project_id","milestone_id","data":{Starts_after, Starts_After_In, Duration, Owner, Flag, Status, Task_List}}
+//             Task_List = a task list of the Task Administrator template (Type Task, no parent); "" removes the mapping.
+// Asset line: {"project_id","line_id","data":{Installation_Status, Delivery_Status, Notes, Serial_Number, MAC_Address_Control, MAC_Address_Dante,
+//              Warranty_Start_Date, Warranty_End_Date, Provision, Outlet_GOP_No, Networked, Switch_Ref, Port_No, POE, VLAN, IP_Address,
+//              Subnet_Mask, Host_Name, Gateway, DNS_Server_1, DNS_Server_2}}  (Project Execution + Asset & Network sections only;
+//              BOQ / procurement fields stay read-only, as the architecture)
+// BOQ line:   {"project_id","boq_id","data":{PO_Date, ETA, Status, Vendors, PO, Mode_of_Transit, Delivered_to_2_0_Warehouse, Date_delivered_to_warehouse,
+//              Delivered_to_Customer, Date_delivered_to_customer}}
+// Rules: due date on/after start date; owners must be on the project team (Project Team grid); ETA on/after PO date.
+// Records are fetched by ID and checked against the project in memory (no mixed && / || criteria).
+// Every saved change is written to Activity_Stream (Widget.activity_values before / after → Widget.activity_add).
+map Widget.project_task_update(string quo_data)
+{
+	response = Map();
+	try 
+	{
+		req = quo_data.toMap();
+		data = ifnull(req.get("data"),Map());
+		projRec = Project[ID == ifnull(req.get("project_id"),"0").toString().toLong()];
+		taskText = ifnull(req.get("task_id"),"").toString();
+		lineText = ifnull(req.get("line_id"),"").toString();
+		boqText = ifnull(req.get("boq_id"),"").toString();
+		milestoneText = ifnull(req.get("milestone_id"),"").toString();
+		eid = 0;
+		if(projRec.count() > 0)
+		{
+			eid = ifnull(projRec.Accepted_Estimate,0);
+		}
+		if(projRec.count() == 0)
+		{
+			response = {"status":"error","code":"NOT_FOUND","message":"Project not found"};
+		}
+		else if(lineText.isNumber())
+		{
+			lineRec = Costing_Lineitem[ID == lineText.toLong()];
+			lineInProject = false;
+			if(lineRec.count() > 0)
+			{
+				lineInProject = lineRec.Project == projRec.ID;
+				if(!lineInProject && eid != 0)
+				{
+					lineInProject = lineRec.Cost_Analysis == eid;
+				}
+			}
+			if(!lineInProject)
+			{
+				response = {"status":"error","code":"NOT_FOUND","message":"Asset line not found in this project"};
+			}
+			else
+			{
+				before = thisapp.Widget.activity_values("Asset",lineRec.ID.toString());
+				if(data.containKey("Installation_Status"))
+				{
+					statusText = ifnull(data.get("Installation_Status"),"").toString();
+					statusId = null;
+					if(statusText.isNumber())
+					{
+						statusId = statusText.toLong();
+					}
+					lineRec.Installation_Status=statusId;
+				}
+				if(data.containKey("Delivery_Status"))
+				{
+					statusText = ifnull(data.get("Delivery_Status"),"").toString();
+					statusId = null;
+					if(statusText.isNumber())
+					{
+						statusId = statusText.toLong();
+					}
+					lineRec.Delivery_Status=statusId;
+				}
+				textFields = {"Notes","Serial_Number","MAC_Address_Control","MAC_Address_Dante","Provision","Outlet_GOP_No","Switch_Ref","Port_No","POE","VLAN","IP_Address","Subnet_Mask","Host_Name","Gateway","DNS_Server_1","DNS_Server_2"};
+				for each  fieldName in data.keys()
+				{
+					textValue = ifnull(data.get(fieldName),"").toString().trim();
+					if(textFields.contains(fieldName))
+					{
+						if(fieldName == "Notes")
+						{
+							lineRec.Notes=textValue;
+						}
+						else if(fieldName == "Serial_Number")
+						{
+							lineRec.Serial_Number=textValue;
+						}
+						else if(fieldName == "MAC_Address_Control")
+						{
+							lineRec.MAC_Address_Control=textValue;
+						}
+						else if(fieldName == "MAC_Address_Dante")
+						{
+							lineRec.MAC_Address_Dante=textValue;
+						}
+						else if(fieldName == "Provision")
+						{
+							lineRec.Provision=textValue;
+						}
+						else if(fieldName == "Outlet_GOP_No")
+						{
+							lineRec.Outlet_GOP_No=textValue;
+						}
+						else if(fieldName == "Switch_Ref")
+						{
+							lineRec.Switch_Ref=textValue;
+						}
+						else if(fieldName == "Port_No")
+						{
+							lineRec.Port_No=textValue;
+						}
+						else if(fieldName == "POE")
+						{
+							lineRec.POE=textValue;
+						}
+						else if(fieldName == "VLAN")
+						{
+							lineRec.VLAN=textValue;
+						}
+						else if(fieldName == "IP_Address")
+						{
+							lineRec.IP_Address=textValue;
+						}
+						else if(fieldName == "Subnet_Mask")
+						{
+							lineRec.Subnet_Mask=textValue;
+						}
+						else if(fieldName == "Host_Name")
+						{
+							lineRec.Host_Name=textValue;
+						}
+						else if(fieldName == "Gateway")
+						{
+							lineRec.Gateway=textValue;
+						}
+						else if(fieldName == "DNS_Server_1")
+						{
+							lineRec.DNS_Server_1=textValue;
+						}
+						else
+						{
+							lineRec.DNS_Server_2=textValue;
+						}
+					}
+					else if(fieldName == "Warranty_Start_Date" || fieldName == "Warranty_End_Date")
+					{
+						warrantyDate = null;
+						if(textValue != "")
+						{
+							warrantyDate = textValue.toDate();
+						}
+						if(fieldName == "Warranty_Start_Date")
+						{
+							lineRec.Warranty_Start_Date=warrantyDate;
+						}
+						else
+						{
+							lineRec.Warranty_End_Date=warrantyDate;
+						}
+					}
+					else if(fieldName == "Networked")
+					{
+						lineRec.Networked=textValue == "true";
+					}
+				}
+				lineName = ifnull(lineRec.Model,"");
+				if(lineName == "")
+				{
+					lineName = ifnull(lineRec.Item_Description,"Asset line");
+				}
+				thisapp.Widget.activity_add(projRec.ID.toString(),"Asset",lineRec.ID.toString(),lineName,before,thisapp.Widget.activity_values("Asset",lineRec.ID.toString()));
+				response = {"status":"success","id":lineRec.ID.toString()};
+			}
+		}
+		else if(milestoneText.isNumber())
+		{
+			msRec = Milestone[ID == milestoneText.toLong()];
+			if(msRec.count() == 0 || msRec.Project != projRec.ID)
+			{
+				response = {"status":"error","code":"NOT_FOUND","message":"Milestone not found in this project"};
+			}
+			else
+			{
+				errors = List();
+				afterText = ifnull(data.get("Starts_after"),"").toString().trim();
+				durationText = ifnull(data.get("Duration"),"").toString().trim();
+				unitText = ifnull(data.get("Starts_After_In"),"").toString();
+				flagText = ifnull(data.get("Flag"),"").toString();
+				ownerText = ifnull(data.get("Owner"),"").toString();
+				statusText = ifnull(data.get("Status"),"").toString();
+				units = {"Days","Weeks","Months"};
+				flags = {"Internal","External"};
+				if(data.containKey("Starts_after") && afterText != "" && !afterText.isNumber())
+				{
+					errors.add("Starts after must be a whole number of 0 or more");
+				}
+				if(data.containKey("Duration") && durationText != "" && !durationText.isNumber())
+				{
+					errors.add("Duration must be a whole number of days");
+				}
+				if(data.containKey("Starts_After_In") && unitText != "" && !units.contains(unitText))
+				{
+					errors.add("Starts after in must be Days, Weeks or Months");
+				}
+				if(data.containKey("Flag") && flagText != "" && !flags.contains(flagText))
+				{
+					errors.add("Flag must be Internal or External");
+				}
+				if(ownerText != "")
+				{
+					validOwner = false;
+					if(ownerText.isNumber())
+					{
+						validOwner = Users[ID == ownerText.toLong()].count() > 0;
+					}
+					if(!validOwner)
+					{
+						errors.add("Owner not found in Users");
+					}
+				}
+				if(statusText != "")
+				{
+					validStatus = false;
+					if(statusText.isNumber())
+					{
+						validStatus = Status[ID == statusText.toLong() && Modules.contains("Milestone")].count() > 0;
+					}
+					if(!validStatus)
+					{
+						errors.add("Status is not a Milestone status");
+					}
+				}
+				listText = ifnull(data.get("Task_List"),"").toString();
+				if(listText != "")
+				{
+					validList = false;
+					if(listText.isNumber())
+					{
+						validList = Administration_Milestone_project_Template[ID == listText.toLong() && Type_field == "Task"].count() > 0;
+					}
+					if(!validList)
+					{
+						errors.add("Task list not found in the Task Administrator template");
+					}
+				}
+				if(errors.size() > 0)
+				{
+					response = {"status":"error","code":"INVALID","message":errors.toString(". ")};
+				}
+				else
+				{
+					before = thisapp.Widget.activity_values("Milestone",msRec.ID.toString());
+					if(data.containKey("Task_List"))
+					{
+						if(listText == "")
+						{
+							msRec.Task_List=null;
+						}
+						else
+						{
+							msRec.Task_List=listText.toLong();
+						}
+					}
+					if(data.containKey("Starts_after"))
+					{
+						afterValue = null;
+						if(afterText != "")
+						{
+							afterValue = afterText.toLong();
+						}
+						msRec.Starts_after=afterValue;
+					}
+					if(data.containKey("Starts_After_In"))
+					{
+						msRec.Starts_After_In=unitText;
+					}
+					if(data.containKey("Duration"))
+					{
+						durationValue = null;
+						if(durationText != "")
+						{
+							durationValue = durationText.toLong();
+						}
+						msRec.Duration=durationValue;
+					}
+					if(data.containKey("Flag"))
+					{
+						msRec.Flag=flagText;
+					}
+					if(data.containKey("Owner"))
+					{
+						if(ownerText == "")
+						{
+							msRec.Owner=null;
+						}
+						else
+						{
+							msRec.Owner=ownerText.toLong();
+						}
+					}
+					if(data.containKey("Status"))
+					{
+						if(statusText == "")
+						{
+							msRec.Status=null;
+						}
+						else
+						{
+							msRec.Status=statusText.toLong();
+						}
+					}
+					thisapp.Widget.activity_add(projRec.ID.toString(),"Milestone",msRec.ID.toString(),ifnull(msRec.Milestone_Name,""),before,thisapp.Widget.activity_values("Milestone",msRec.ID.toString()));
+					response = {"status":"success","id":msRec.ID.toString()};
+				}
+			}
+		}
+		else if(boqText.isNumber())
+		{
+			boqRec = BOQ[ID == boqText.toLong()];
+			inProject = false;
+			if(boqRec.count() > 0)
+			{
+				byEstimate = eid != 0 && boqRec.Estimate1 == eid;
+				byReference = ifnull(projRec.Project_Reference,"") != "" && boqRec.Project_Reference == projRec.Project_Reference;
+				inProject = boqRec.Project == projRec.ID || byEstimate || byReference;
+			}
+			if(!inProject)
+			{
+				response = {"status":"error","code":"NOT_FOUND","message":"BOQ line not found in this project"};
+			}
+			else
+			{
+				before = thisapp.Widget.activity_values("BOQ",boqRec.ID.toString());
+				poDate = boqRec.PO_Date;
+				eta = boqRec.ETA;
+				for each  dateField in {"PO_Date","ETA","Date_delivered_to_warehouse","Date_delivered_to_customer"}
+				{
+					if(data.containKey(dateField))
+					{
+						dateText = ifnull(data.get(dateField),"").toString().trim();
+						dateValue = null;
+						if(dateText != "")
+						{
+							dateValue = dateText.toDate();
+						}
+						if(dateField == "PO_Date")
+						{
+							poDate = dateValue;
+						}
+						else if(dateField == "ETA")
+						{
+							eta = dateValue;
+						}
+						else if(dateField == "Date_delivered_to_warehouse")
+						{
+							boqRec.Date_delivered_to_warehouse=dateValue;
+						}
+						else
+						{
+							boqRec.Date_delivered_to_customer=dateValue;
+						}
+					}
+				}
+				if(poDate != null && eta != null && eta < poDate)
+				{
+					response = {"status":"error","code":"INVALID","message":"ETA must be on or after the PO date"};
+				}
+				else
+				{
+					boqRec.PO_Date=poDate;
+					boqRec.ETA=eta;
+					if(data.containKey("Status"))
+					{
+						statusText = ifnull(data.get("Status"),"").toString();
+						statusId = null;
+						if(statusText.isNumber())
+						{
+							statusId = statusText.toLong();
+						}
+						boqRec.Status=statusId;
+					}
+					if(data.containKey("Vendors"))
+					{
+						vendorText = ifnull(data.get("Vendors"),"").toString();
+						vendorId = null;
+						if(vendorText.isNumber())
+						{
+							if(Vendors[ID == vendorText.toLong()].count() > 0)
+							{
+								vendorId = vendorText.toLong();
+							}
+						}
+						boqRec.Vendors=vendorId;
+					}
+					if(data.containKey("PO"))
+					{
+						boqRec.PO=ifnull(data.get("PO"),"").toString().trim();
+					}
+					if(data.containKey("Mode_of_Transit"))
+					{
+						boqRec.Mode_of_Transit=ifnull(data.get("Mode_of_Transit"),"").toString();
+					}
+					if(data.containKey("Delivered_to_2_0_Warehouse"))
+					{
+						boqRec.Delivered_to_2_0_Warehouse=ifnull(data.get("Delivered_to_2_0_Warehouse"),"").toString();
+					}
+					if(data.containKey("Delivered_to_Customer"))
+					{
+						boqRec.Delivered_to_Customer=ifnull(data.get("Delivered_to_Customer"),"").toString();
+					}
+					boqName = ifnull(boqRec.Model,"");
+					if(boqRec.SKU != null)
+					{
+						boqName = ifnull(boqRec.SKU.SKU,boqName);
+					}
+					if(boqName == "")
+					{
+						boqName = ifnull(boqRec.Description,"BOQ line");
+					}
+					thisapp.Widget.activity_add(projRec.ID.toString(),"BOQ",boqRec.ID.toString(),boqName,before,thisapp.Widget.activity_values("BOQ",boqRec.ID.toString()));
+					response = {"status":"success","id":boqRec.ID.toString()};
+				}
+			}
+		}
+		else
+		{
+			tid = 0;
+			if(taskText.isNumber())
+			{
+				tid = taskText.toLong();
+			}
+			taskRec = Task[ID == tid && Project_Name == projRec.ID];
+			if(taskRec.count() == 0)
+			{
+				response = {"status":"error","code":"NOT_FOUND","message":"Task not found in this project"};
+			}
+			else
+			{
+				startDate = taskRec.Task_Start_Date;
+				endDate = taskRec.Task_End_Date;
+				if(data.containKey("Task_Start_Date"))
+				{
+					dateText = ifnull(data.get("Task_Start_Date"),"").toString().trim();
+					startDate = null;
+					if(dateText != "")
+					{
+						startDate = dateText.toDate();
+					}
+				}
+				if(data.containKey("Task_End_Date"))
+				{
+					dateText = ifnull(data.get("Task_End_Date"),"").toString().trim();
+					endDate = null;
+					if(dateText != "")
+					{
+						endDate = dateText.toDate();
+					}
+				}
+				teamIds = List();
+				for each  teamRow in projRec.Pro
+				{
+					if(teamRow.Team_Member != null)
+					{
+						teamIds.add(teamRow.Team_Member);
+					}
+				}
+				ownerIds = List();
+				outsiders = List();
+				for each  ownerId in ifnull(data.get("Owners"),List())
+				{
+					ownerIds.add(ownerId.toString().toLong());
+					if(!teamIds.contains(ownerId.toString().toLong()))
+					{
+						outsiders.add(ownerId.toString());
+					}
+				}
+				if(startDate != null && endDate != null && endDate < startDate)
+				{
+					response = {"status":"error","code":"INVALID","message":"Due date must be on or after the start date"};
+				}
+				else if(data.containKey("Owners") && outsiders.size() > 0)
+				{
+					response = {"status":"error","code":"INVALID","message":"Assignees must be members of the project team"};
+				}
+				else
+				{
+					before = thisapp.Widget.activity_values("Task",taskRec.ID.toString());
+					taskRec.Task_Start_Date=startDate;
+					if(data.containKey("Duration"))
+					{
+						durationText = ifnull(data.get("Duration"),"").toString().trim();
+						durationValue = null;
+						if(durationText.isNumber())
+						{
+							durationValue = durationText.toLong();
+						}
+						taskRec.Duration=durationValue;
+					}
+					taskRec.Task_End_Date=endDate;
+					if(data.containKey("Actual_Start_Date"))
+					{
+						dateText = ifnull(data.get("Actual_Start_Date"),"").toString().trim();
+						actualStart = null;
+						if(dateText != "")
+						{
+							actualStart = dateText.toDate();
+						}
+						taskRec.Actual_Start_Date=actualStart;
+					}
+					if(data.containKey("Actual_Complete_Date"))
+					{
+						dateText = ifnull(data.get("Actual_Complete_Date"),"").toString().trim();
+						actualEnd = null;
+						if(dateText != "")
+						{
+							actualEnd = dateText.toDate();
+						}
+						taskRec.Actual_Complete_Date=actualEnd;
+					}
+					if(data.containKey("Task_Status"))
+					{
+						statusText = ifnull(data.get("Task_Status"),"").toString();
+						statusId = null;
+						if(statusText.isNumber())
+						{
+							statusId = statusText.toLong();
+						}
+						taskRec.Task_Status=statusId;
+					}
+					if(data.containKey("Task_Name") && ifnull(data.get("Task_Name"),"").toString().trim() != "")
+					{
+						taskRec.Task_Name=data.get("Task_Name").toString().trim();
+					}
+					if(data.containKey("Task_Description"))
+					{
+						taskRec.Task_Description=ifnull(data.get("Task_Description"),"").toString();
+					}
+					if(data.containKey("Work_Hours"))
+					{
+						hoursText = ifnull(data.get("Work_Hours"),"").toString().trim();
+						hoursValue = null;
+						if(hoursText != "")
+						{
+							hoursValue = hoursText.toDecimal();
+						}
+						taskRec.Work_Hours=hoursValue;
+					}
+					if(data.containKey("Billing_Type"))
+					{
+						taskRec.Billing_Type=ifnull(data.get("Billing_Type"),"").toString();
+					}
+					if(data.containKey("Parent_Task"))
+					{
+						parentText = ifnull(data.get("Parent_Task"),"").toString();
+						parentId = null;
+						if(parentText.isNumber())
+						{
+							parentRec = Task[ID == parentText.toLong()];
+							if(parentRec.count() > 0 && parentRec.Project_Name == projRec.ID && parentRec.ID != taskRec.ID)
+							{
+								parentId = parentRec.ID;
+							}
+						}
+						taskRec.Parent_Task=parentId;
+					}
+					if(data.containKey("Priority"))
+					{
+						taskRec.Priority=ifnull(data.get("Priority"),"").toString();
+					}
+					if(data.containKey("Precent_Complete"))
+					{
+						taskRec.Precent_Complete=ifnull(data.get("Precent_Complete"),"0").toString().toDecimal();
+					}
+					if(data.containKey("Owners"))
+					{
+						taskRec.Owners=ownerIds;
+					}
+					thisapp.Widget.activity_add(projRec.ID.toString(),"Task",taskRec.ID.toString(),ifnull(taskRec.Task_Name,""),before,thisapp.Widget.activity_values("Task",taskRec.ID.toString()));
+					response = {"status":"success","id":taskRec.ID.toString()};
+				}
+			}
+		}
+	}
+	catch (e)
+	{
+		response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+	}
+	return response;
+}

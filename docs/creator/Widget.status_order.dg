@@ -1,0 +1,11 @@
+// Widget.status_order() — the static status order (one place). Not a Custom API: called by project_details and project_update.
+// Status records are matched by name; their IDs still come from the Status form.
+map Widget.status_order()
+{
+	order = Map();
+	order.put("project",{"Registered","Kick-Off Done","Planning / Shop Drawings","Procurement in Progress","Partially Delivered","Ready for Installation","Installation in Progress","Configuration & T&C","UAT","Snagging","Handover","Completed","DLP / Service","Closed"});
+	order.put("anytime",{"On Hold","Cancelled"});
+	order.put("task",{"Not Started","On Track","Behind","At Risk","Complete","Deprioritized"});
+	order.put("boq",{"Order Pending ⚠️","Ordered  ⏳","Not Ordered 🚩","In Production ⚙️","Ready to Ship 🏳️","In Transit 🚛 🛫 🚢 🚐","In Customs 🚨","2.0 Dubai Warehouse 📍","2.0 Riyadh Office 📍","Delivered to Client  ✅","2.0 Riyadh Warehouse 📍","Partially Delivered 🚧"});
+	return order;
+}

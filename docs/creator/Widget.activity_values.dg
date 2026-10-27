@@ -1,0 +1,215 @@
+// Widget.activity_values(string module, string record_id) — the tracked fields of one record as {"Label":"text"}.
+// Called before and after a save; Widget.activity_add logs every label whose text changed. No Custom API.
+// module: Project | Milestone | Task | BOQ | Risk | Asset
+map Widget.activity_values(string module, string record_id)
+{
+	values = Map();
+	rid = 0;
+	if(record_id.isNumber())
+	{
+		rid = record_id.toLong();
+	}
+	if(module == "Task")
+	{
+		actTask = Task[ID == rid];
+		if(actTask.count() > 0)
+		{
+			values.put("Task name",ifnull(actTask.Task_Name,""));
+			values.put("Description",ifnull(actTask.Task_Description,""));
+			values.put("Start date",ifnull(actTask.Task_Start_Date,"").toString());
+			values.put("Due date",ifnull(actTask.Task_End_Date,"").toString());
+			values.put("Duration",ifnull(actTask.Duration,"").toString());
+			values.put("Actual start date",ifnull(actTask.Actual_Start_Date,"").toString());
+			values.put("Actual complete date",ifnull(actTask.Actual_Complete_Date,"").toString());
+			values.put("Priority",ifnull(actTask.Priority,""));
+			values.put("Completion %",ifnull(actTask.Precent_Complete,"").toString());
+			values.put("Work hours",ifnull(actTask.Work_Hours,"").toString());
+			values.put("Billing type",ifnull(actTask.Billing_Type,""));
+			statusName = "";
+			if(actTask.Task_Status != null)
+			{
+				statusName = ifnull(actTask.Task_Status.Status_Name,"");
+			}
+			values.put("Status",statusName);
+			parentName = "";
+			if(actTask.Parent_Task != null)
+			{
+				parentName = ifnull(actTask.Parent_Task.Task_Name,"");
+			}
+			values.put("Parent task",parentName);
+			ownerNames = List();
+			for each  actOwnerId in ifnull(actTask.Owners,List())
+			{
+				actOwner = Users[ID == actOwnerId];
+				if(actOwner.count() > 0)
+				{
+					ownerNames.add(ifnull(actOwner.Name,""));
+				}
+			}
+			values.put("Owners",ownerNames.toString(", "));
+		}
+	}
+	else if(module == "Milestone")
+	{
+		actMilestone = Milestone[ID == rid];
+		if(actMilestone.count() > 0)
+		{
+			values.put("Milestone name",ifnull(actMilestone.Milestone_Name,""));
+			values.put("Starts after",ifnull(actMilestone.Starts_after,"").toString() + " " + ifnull(actMilestone.Starts_After_In,""));
+			values.put("Duration",ifnull(actMilestone.Duration,"").toString());
+			values.put("Flag",ifnull(actMilestone.Flag,""));
+			statusName = "";
+			if(actMilestone.Status != null)
+			{
+				statusName = ifnull(actMilestone.Status.Status_Name,"");
+			}
+			values.put("Status",statusName);
+			ownerName = "";
+			if(actMilestone.Owner != null)
+			{
+				ownerName = ifnull(actMilestone.Owner.Name,"");
+			}
+			values.put("Owner",ownerName);
+			listName = "";
+			if(actMilestone.Task_List != null)
+			{
+				listName = ifnull(actMilestone.Task_List.Task_Name,"");
+			}
+			values.put("Task list",listName);
+		}
+	}
+	else if(module == "BOQ")
+	{
+		actBoq = BOQ[ID == rid];
+		if(actBoq.count() > 0)
+		{
+			values.put("PO date",ifnull(actBoq.PO_Date,"").toString());
+			values.put("ETA",ifnull(actBoq.ETA,"").toString());
+			values.put("PO#",ifnull(actBoq.PO,""));
+			values.put("Mode of transit",ifnull(actBoq.Mode_of_Transit,""));
+			values.put("Delivered to 2.0 Warehouse",ifnull(actBoq.Delivered_to_2_0_Warehouse,""));
+			values.put("Warehouse date",ifnull(actBoq.Date_delivered_to_warehouse,"").toString());
+			values.put("Delivered to customer",ifnull(actBoq.Delivered_to_Customer,""));
+			values.put("Customer delivery date",ifnull(actBoq.Date_delivered_to_customer,"").toString());
+			statusName = "";
+			if(actBoq.Status != null)
+			{
+				statusName = ifnull(actBoq.Status.Status_Name,"");
+			}
+			values.put("Status",statusName);
+			vendorName = "";
+			if(actBoq.Vendors != null)
+			{
+				vendorName = ifnull(actBoq.Vendors.Vendor_Name,"");
+			}
+			values.put("Vendor",vendorName);
+		}
+	}
+	else if(module == "Asset")
+	{
+		actLine = Costing_Lineitem[ID == rid];
+		if(actLine.count() > 0)
+		{
+			values.put("Notes",ifnull(actLine.Notes,""));
+			values.put("Serial number",ifnull(actLine.Serial_Number,""));
+			values.put("MAC (control)",ifnull(actLine.MAC_Address_Control,""));
+			values.put("MAC (Dante)",ifnull(actLine.MAC_Address_Dante,""));
+			values.put("Warranty start",ifnull(actLine.Warranty_Start_Date,"").toString());
+			values.put("Warranty end",ifnull(actLine.Warranty_End_Date,"").toString());
+			values.put("Provision",ifnull(actLine.Provision,""));
+			values.put("Outlet / GOP no",ifnull(actLine.Outlet_GOP_No,""));
+			values.put("Networked",ifnull(actLine.Networked,false).toString());
+			values.put("Switch ref",ifnull(actLine.Switch_Ref,""));
+			values.put("Port no",ifnull(actLine.Port_No,""));
+			values.put("PoE",ifnull(actLine.POE,""));
+			values.put("VLAN",ifnull(actLine.VLAN,""));
+			values.put("IP address",ifnull(actLine.IP_Address,""));
+			values.put("Subnet mask",ifnull(actLine.Subnet_Mask,""));
+			values.put("Host name",ifnull(actLine.Host_Name,""));
+			values.put("Gateway",ifnull(actLine.Gateway,""));
+			values.put("DNS 1",ifnull(actLine.DNS_Server_1,""));
+			values.put("DNS 2",ifnull(actLine.DNS_Server_2,""));
+			deliveryName = "";
+			if(actLine.Delivery_Status != null)
+			{
+				deliveryName = ifnull(actLine.Delivery_Status.Status_Name,"");
+			}
+			values.put("Delivery status",deliveryName);
+			installName = "";
+			if(actLine.Installation_Status != null)
+			{
+				installName = ifnull(actLine.Installation_Status.Status_Name,"");
+			}
+			values.put("Installation status",installName);
+		}
+	}
+	else if(module == "Risk")
+	{
+		actRisk = Project_Risk[ID == rid];
+		if(actRisk.count() > 0)
+		{
+			values.put("Risk ID",ifnull(actRisk.Risk_ID,""));
+			values.put("Risk description",ifnull(actRisk.Risk_Description,""));
+			values.put("Probability",ifnull(actRisk.Probability,""));
+			values.put("Impact",ifnull(actRisk.Impact,""));
+			values.put("Risk score",ifnull(actRisk.Risk_Score,"").toString());
+			values.put("Risk severity",ifnull(actRisk.Risk_Severity,""));
+			values.put("Priority",ifnull(actRisk.Priority,""));
+			statusName = "";
+			if(actRisk.Risk_Status != null)
+			{
+				statusName = ifnull(actRisk.Risk_Status.Status_Name,"");
+			}
+			values.put("Status",statusName);
+			ownerName = "";
+			if(actRisk.Risk_Owner != null)
+			{
+				ownerName = ifnull(actRisk.Risk_Owner.Name,"");
+			}
+			values.put("Risk owner",ownerName);
+			departmentName = "";
+			if(actRisk.Department != null)
+			{
+				departmentName = ifnull(actRisk.Department.Name,"");
+			}
+			values.put("Department",departmentName);
+		}
+	}
+	else if(module == "Project")
+	{
+		actProject = Project[ID == rid];
+		if(actProject.count() > 0)
+		{
+			values.put("Project name",ifnull(actProject.Project_Name,""));
+			values.put("Project reference",ifnull(actProject.Project_Reference,""));
+			values.put("Type of project",ifnull(actProject.Type_of_Project,""));
+			values.put("Start date",ifnull(actProject.Start_Date,"").toString());
+			values.put("Completion date",ifnull(actProject.Project_Completion_Date,"").toString());
+			values.put("Actual completion date",ifnull(actProject.Actual_Completion_Date,"").toString());
+			values.put("Project value (PO)",ifnull(actProject.Project_Value_PO,"").toString());
+			values.put("Client PO #",ifnull(actProject.Client_PO_No,""));
+			values.put("City",ifnull(actProject.City,""));
+			values.put("State",ifnull(actProject.State,""));
+			values.put("Description",ifnull(actProject.Project_Description,""));
+			statusName = "";
+			if(actProject.Project_Status != null)
+			{
+				statusName = ifnull(actProject.Project_Status.Status_Name,"");
+			}
+			values.put("Status",statusName);
+			clientName = "";
+			if(actProject.Client_Name != null)
+			{
+				clientName = ifnull(actProject.Client_Name.Customer_Name,"");
+			}
+			values.put("Client",clientName);
+			managerName = "";
+			if(actProject.Project_Manager != null)
+			{
+				managerName = ifnull(actProject.Project_Manager.Name,"");
+			}
+			values.put("Project manager",managerName);
+		}
+	}
+	return values;
+}

@@ -1,0 +1,158 @@
+// Widget.project_options(string quo_data) — dropdown values. Custom API: Widget_Project_Options (GET, quo_data).
+// quo_data: {"source":"customers|statuses|countries|currencies|users|estimates|taskList|taskStatuses|installStatuses|boqStatuses|milestoneStatuses|projectStatuses|riskStatuses|departments|taskListTemplates|vendors|warehouses|taxes"} → {"status":"success","records":[{"ID","label"}]}
+map Widget.project_options(string quo_data)
+{
+	response = Map();
+	try 
+	{
+		source = ifnull(quo_data.toMap().get("source"),"").toString();
+		rows = List();
+		if(source == "customers")
+		{
+			for each  custRec in Customers[ID != 0] sort by Customer_Name
+			{
+				rows.add({"ID":custRec.ID.toString(),"label":ifnull(custRec.Customer_Name,"")});
+			}
+		}
+		else if(source == "statuses")
+		{
+			for each  statusRec in Status[ID != 0] sort by Index_field
+			{
+				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,"")});
+			}
+		}
+		else if(source == "countries")
+		{
+			for each  countryRec in Country[ID != 0] sort by Country_Name
+			{
+				rows.add({"ID":countryRec.ID.toString(),"label":ifnull(countryRec.Country_Name,"")});
+			}
+		}
+		else if(source == "currencies")
+		{
+			for each  currencyRec in Currency[ID != 0] sort by Currency_Name
+			{
+				rows.add({"ID":currencyRec.ID.toString(),"label":ifnull(currencyRec.Currency_Name,"")});
+			}
+		}
+		else if(source == "users")
+		{
+			for each  userRec in Users[ID != 0] sort by Name
+			{
+				rows.add({"ID":userRec.ID.toString(),"label":ifnull(userRec.Name,"")});
+			}
+		}
+		else if(source == "estimates")
+		{
+			// same rule as the Estimate_Accepted report: Status Index 3 and latest version
+			acceptedIds = Status[Index_field == 3].ID.getAll();
+			for each  estRec in Estimate[Status in acceptedIds && Latest_version == true] sort by Quote_No
+			{
+				rows.add({"ID":estRec.ID.toString(),"label":ifnull(estRec.Quote_No,"")});
+			}
+		}
+		else if(source == "taskList")
+		{
+			for each  taskRec in Administration_Milestone_project_Template[ID != 0] sort by Task_Name
+			{
+				rows.add({"ID":taskRec.ID.toString(),"label":ifnull(taskRec.Task_Name,"")});
+			}
+		}
+		else if(source == "taskStatuses")
+		{
+			for each  statusRec in Status[Modules.contains("Task")] sort by Index_field
+			{
+				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,"")});
+			}
+		}
+		else if(source == "installStatuses")
+		{
+			for each  statusRec in Status[Modules.contains("Installation")] sort by Index_field
+			{
+				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,"")});
+			}
+		}
+		else if(source == "vendors")
+		{
+			for each  vendorRec in Vendors[ID != 0] sort by Vendor_Name
+			{
+				rows.add({"ID":vendorRec.ID.toString(),"label":ifnull(vendorRec.Vendor_Name,""),"email":ifnull(vendorRec.Email,""),"phone":ifnull(vendorRec.Phone_Number,"")});
+			}
+		}
+		// Ship-to of a purchase order (Purchase_Order.Warehouse)
+		else if(source == "warehouses")
+		{
+			for each  warehouseRec in Warehouse[ID != 0] sort by Warehouse_Name
+			{
+				rows.add({"ID":warehouseRec.ID.toString(),"label":ifnull(warehouseRec.Warehouse_Name,"")});
+			}
+		}
+		else if(source == "taxes")
+		{
+			for each  taxRec in Taxes[ID != 0] sort by Tax_Name
+			{
+				rows.add({"ID":taxRec.ID.toString(),"label":ifnull(taxRec.Tax_Name,"") + " (" + ifnull(taxRec.Rate,0) + "%)"});
+			}
+		}
+		else if(source == "boqStatuses")
+		{
+			for each  statusRec in Status[Modules.contains("BOQ")] sort by Index_field
+			{
+				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,"")});
+			}
+		}
+		else if(source == "milestoneStatuses")
+		{
+			for each  statusRec in Status[Modules.contains("Milestone")] sort by Index_field
+			{
+				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,"")});
+			}
+		}
+		else if(source == "projectStatuses")
+		{
+			for each  statusRec in Status[Modules.contains("Project")] sort by Index_field
+			{
+				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,"")});
+			}
+		}
+		else if(source == "riskStatuses")
+		{
+			for each  statusRec in Status[Modules.contains("Project Risk")] sort by Index_field
+			{
+				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,"")});
+			}
+		}
+		// Task lists of the Task Administrator template (Type Task, no parent) — the values of Milestone.Task_List
+		else if(source == "taskListTemplates")
+		{
+			for each  listRec in Administration_Milestone_project_Template[Type_field == "Task" && Parent_Task == null] sort by Index_field
+			{
+				rows.add({"ID":listRec.ID.toString(),"label":ifnull(listRec.Task_Name,"")});
+			}
+		}
+		else if(source == "departments")
+		{
+			for each  deptRec in Department[ID != 0] sort by Name
+			{
+				rows.add({"ID":deptRec.ID.toString(),"label":ifnull(deptRec.Name,"")});
+			}
+		}
+		else
+		{
+			rows = null;
+		}
+		// An unknown source is an error (an older function in Creator), never a silently empty dropdown
+		if(rows == null)
+		{
+			response = {"status":"error","code":"INVALID","message":"Unknown action: " + source};
+		}
+		else
+		{
+			response = {"status":"success","records":rows};
+		}
+	}	catch (e)
+	{
+		response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+	}
+	return response;
+}

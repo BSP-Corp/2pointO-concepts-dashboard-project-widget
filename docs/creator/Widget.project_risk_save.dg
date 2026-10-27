@@ -1,0 +1,209 @@
+// Widget.project_risk_save(string quo_data) — create / edit a Project_Risk record (Risk Register).
+// Custom API: Widget_Project_Risk_Save (POST, quo_data).
+// quo_data: {"project_id", "risk_id" (empty = create), "data":{"Risk_ID","Risk_Description","Cause","Probability","Impact",
+//            "Priority","Risk_Status","Risk_Owner","Department"}}  — only the fields to save; lookups as record IDs ("" = clear).
+// Risk_Score and Risk_Severity are always calculated here (workbook Risk Register formulas): score = probability × impact
+// (1–25), severity = the workbook's probability / impact table. Probability and Impact are mandatory (form "must have").
+// Created / changed risks are written to Activity_Stream.
+map Widget.project_risk_save(string quo_data)
+{
+	response = Map();
+	try
+	{
+		req = quo_data.toMap();
+		data = ifnull(req.get("data"),Map());
+		projectText = ifnull(req.get("project_id"),"").toString();
+		riskText = ifnull(req.get("risk_id"),"").toString();
+		errors = List();
+		pid = 0;
+		if(projectText.isNumber())
+		{
+			pid = projectText.toLong();
+		}
+		projRec = Project[ID == pid];
+		if(projRec.count() == 0)
+		{
+			errors.add("Project not found");
+		}
+		riskRec = Project_Risk[ID == 0];
+		if(riskText != "")
+		{
+			if(riskText.isNumber())
+			{
+				riskRec = Project_Risk[ID == riskText.toLong()];
+			}
+			if(riskRec.count() == 0 || riskRec.Project_Name != pid)
+			{
+				errors.add("Risk not found in this project");
+			}
+		}
+		probabilityScore = {"Very Low":1,"Low":2,"Medium":3,"High":4,"Very High":5};
+		impactScore = {"Negligible":1,"Minor":2,"Moderate":3,"Significant":4,"Severe":5};
+		matrix = Map();
+		matrix.put("Very High",{"Negligible":"Medium","Minor":"High","Moderate":"High","Significant":"Critical","Severe":"Critical"});
+		matrix.put("High",{"Negligible":"Low","Minor":"Medium","Moderate":"High","Significant":"Critical","Severe":"Critical"});
+		matrix.put("Medium",{"Negligible":"Low","Minor":"Medium","Moderate":"Medium","Significant":"High","Severe":"Critical"});
+		matrix.put("Low",{"Negligible":"Very Low","Minor":"Low","Moderate":"Medium","Significant":"High","Severe":"High"});
+		matrix.put("Very Low",{"Negligible":"Very Low","Minor":"Low","Moderate":"Low","Significant":"Medium","Severe":"High"});
+		// Probability / Impact: new value, else the stored one (edit)
+		probability = "";
+		impact = "";
+		if(riskRec.count() > 0)
+		{
+			probability = ifnull(riskRec.Probability,"");
+			impact = ifnull(riskRec.Impact,"");
+		}
+		if(data.containKey("Probability"))
+		{
+			probability = ifnull(data.get("Probability"),"").toString();
+		}
+		if(data.containKey("Impact"))
+		{
+			impact = ifnull(data.get("Impact"),"").toString();
+		}
+		if(!probabilityScore.containKey(probability))
+		{
+			errors.add("Select a Probability");
+		}
+		if(!impactScore.containKey(impact))
+		{
+			errors.add("Select an Impact");
+		}
+		priority = ifnull(data.get("Priority"),"").toString();
+		priorities = {"High","Medium","Low"};
+		if(data.containKey("Priority") && priority != "" && !priorities.contains(priority))
+		{
+			errors.add("Priority must be High, Medium or Low");
+		}
+		// Lookups must point to existing records (Risk_Status: Status with Modules "Project Risk")
+		statusText = ifnull(data.get("Risk_Status"),"").toString();
+		if(statusText != "")
+		{
+			validStatus = false;
+			if(statusText.isNumber())
+			{
+				validStatus = Status[ID == statusText.toLong() && Modules.contains("Project Risk")].count() > 0;
+			}
+			if(!validStatus)
+			{
+				errors.add("Risk Status is not a Project Risk status");
+			}
+		}
+		ownerText = ifnull(data.get("Risk_Owner"),"").toString();
+		if(ownerText != "")
+		{
+			if(!ownerText.isNumber() || Users[ID == ownerText.toLong()].count() == 0)
+			{
+				errors.add("Risk Owner not found in Users");
+			}
+		}
+		departmentText = ifnull(data.get("Department"),"").toString();
+		if(departmentText != "")
+		{
+			if(!departmentText.isNumber() || Department[ID == departmentText.toLong()].count() == 0)
+			{
+				errors.add("Department not found");
+			}
+		}
+		if(errors.size() > 0)
+		{
+			response = {"status":"error","code":"INVALID","message":errors.toString(". ")};
+		}
+		else
+		{
+			score = probabilityScore.get(probability) * impactScore.get(impact);
+			before = Map();
+			if(riskRec.count() > 0)
+			{
+				before = thisapp.Widget.activity_values("Risk",riskRec.ID.toString());
+			}
+			severity = matrix.get(probability).get(impact);
+			if(riskRec.count() == 0)
+			{
+				// Risk ID like the workbook ("R - n"): next number in this project unless one is typed
+				nextNo = 1;
+				for each  otherRisk in Project_Risk[Project_Name == pid]
+				{
+					otherNo = ifnull(otherRisk.Risk_ID,"").getSuffix("R - ");
+					if(otherNo != null && otherNo.trim().isNumber() && otherNo.trim().toLong() >= nextNo)
+					{
+						nextNo = otherNo.trim().toLong() + 1;
+					}
+				}
+				newId = insert into Project_Risk
+				[
+					Added_User=zoho.loginuser
+					Project_Name=pid
+					Probability=probability
+					Impact=impact
+					Impact1=impact
+					Risk_ID="R - " + nextNo
+				];
+				riskRec = Project_Risk[ID == newId];
+			}
+			riskRec.Probability=probability;
+			riskRec.Impact=impact;
+			// DS 10: Impact1 ("Impact", must have) mirrors Impact
+			riskRec.Impact1=impact;
+			riskRec.Risk_Score=score;
+			riskRec.Risk_Severity=severity;
+			if(data.containKey("Risk_ID") && ifnull(data.get("Risk_ID"),"").toString().trim() != "")
+			{
+				riskRec.Risk_ID=data.get("Risk_ID").toString().trim();
+			}
+			if(data.containKey("Risk_Description"))
+			{
+				riskRec.Risk_Description=ifnull(data.get("Risk_Description"),"").toString();
+			}
+			if(data.containKey("Cause"))
+			{
+				riskRec.Cause=ifnull(data.get("Cause"),"").toString();
+			}
+			if(data.containKey("Priority"))
+			{
+				riskRec.Priority=priority;
+			}
+			if(data.containKey("Risk_Status"))
+			{
+				if(statusText == "")
+				{
+					riskRec.Risk_Status=null;
+				}
+				else
+				{
+					riskRec.Risk_Status=statusText.toLong();
+				}
+			}
+			if(data.containKey("Risk_Owner"))
+			{
+				if(ownerText == "")
+				{
+					riskRec.Risk_Owner=null;
+				}
+				else
+				{
+					riskRec.Risk_Owner=ownerText.toLong();
+				}
+			}
+			if(data.containKey("Department"))
+			{
+				if(departmentText == "")
+				{
+					riskRec.Department=null;
+				}
+				else
+				{
+					riskRec.Department=departmentText.toLong();
+				}
+			}
+			riskName = ifnull(riskRec.Risk_ID,"") + " " + ifnull(riskRec.Risk_Description,"");
+			thisapp.Widget.activity_add(pid.toString(),"Risk",riskRec.ID.toString(),riskName.trim(),before,thisapp.Widget.activity_values("Risk",riskRec.ID.toString()));
+			response = {"status":"success","ID":riskRec.ID.toString(),"Risk_ID":ifnull(riskRec.Risk_ID,""),"Risk_Score":score,"Risk_Severity":severity};
+		}
+	}
+	catch (e)
+	{
+		response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+	}
+	return response;
+}

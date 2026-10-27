@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-font-smoothing: antialiased; }
+  /* Colours come from the console theme tokens (console.css); this only covers the first paint. */
+  body { @apply font-sans; margin: 0; background: #f4f7fc; color: #0f1f3a; }
+  :root[data-theme="dark"] body { background: #0b1220; color: #e6ecf7; }
+}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Project Console</title>
+    <meta name="color-scheme" content="light" />
+    <script>
+      // Light by default for every user; dark only after the user chose it with the switch (saved choice).
+      try {
+        document.documentElement.dataset.theme = localStorage.getItem('2point0-pm:theme') === 'dark' ? 'dark' : 'light'
+      } catch (e) {
+        document.documentElement.dataset.theme = 'light'
+      }
+    </script>
+    <!-- Creator Widget SDK v2 (no init() in v2), same as the Cost Analysis widget. Only active inside Creator; locally the demo data source is used. -->
+    <script src="https://static.zohocdn.com/creator/widgets/version/2.0/widgetsdk-min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

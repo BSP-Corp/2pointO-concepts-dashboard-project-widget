@@ -1,0 +1,22 @@
+// Central query-key factory. Hierarchical: every child key starts with projects.detail(id), so
+// invalidating a project refreshes its records only, and switching project never reuses another project's data.
+export const queryKeys = {
+  projects: {
+    all: ['projects'] as const,
+    list: () => [...queryKeys.projects.all, 'list'] as const,
+    detail: (id: string) => [...queryKeys.projects.all, 'detail', id] as const,
+    record: (id: string) => [...queryKeys.projects.detail(id), 'record'] as const,
+    details: (id: string) => [...queryKeys.projects.detail(id), 'details'] as const,
+    costingLines: (id: string) => [...queryKeys.projects.detail(id), 'costingLines'] as const,
+    boq: (id: string) => [...queryKeys.projects.detail(id), 'boq'] as const,
+    purchaseOrders: (id: string) => [...queryKeys.projects.detail(id), 'purchaseOrders'] as const,
+    poLines: (id: string) => [...queryKeys.projects.detail(id), 'poLines'] as const,
+    milestones: (id: string) => [...queryKeys.projects.detail(id), 'milestones'] as const,
+    risks: (id: string) => [...queryKeys.projects.detail(id), 'risks'] as const,
+    tasks: (id: string) => [...queryKeys.projects.detail(id), 'tasks'] as const,
+    planMilestones: (id: string) => [...queryKeys.projects.detail(id), 'planMilestones'] as const,
+    activity: (id: string, recordId = '') => [...queryKeys.projects.detail(id), 'activity', recordId] as const,
+  },
+  dashboard: () => ['dashboard'] as const,
+  options: (key: string) => ['options', key] as const,
+}

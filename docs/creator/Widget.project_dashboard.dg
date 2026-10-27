@@ -1,0 +1,254 @@
+// Widget.project_dashboard(string quo_data) — Home (Project Search Dashboard). Custom API: Widget_Project_Dashboard (GET, quo_data).
+// One row per project with its counts, employee totals, the estimates for "Search by reference" (Cost Analysis)
+// and the logged-in user.
+// Never mix && with || in one condition: Creator drops the brackets (criteria and if), so conditions are built in steps.
+// Delivered asset line = Delivery or Installation Status "Delivered to Client" / "Delivered" / "Installed" (never "Not …" / "Partially …").
+// Milestones = Milestone form: planned end = project Start Date + Starts after + Duration − 1 days; delayed when it passed and the
+// milestone status is not Complete / Closed. Tasks = Task records with a Parent Task (task lists have none).
+// Health (widget) = At Risk when a milestone is delayed or an open risk is Critical (risks_critical).
+map Widget.project_dashboard(string quo_data)
+{
+	response = Map();
+	try
+	{
+		deliveredIds = List();
+		for each  statusRec in Status[ID != 0]
+		{
+			statusName = ifnull(statusRec.Status_Name,"").toLowerCase().trim();
+			isDelivered = statusName.contains("delivered to client") || statusName == "delivered" || statusName.startsWith("delivered ") || statusName.contains("install");
+			isNegative = statusName.startsWith("not") || statusName.contains("partial");
+			if(isDelivered && !isNegative)
+			{
+				deliveredIds.add(statusRec.ID);
+			}
+		}
+		// Risk Escalation Matrix (same as the widget): severity = matrix[probability][impact]
+		matrix = Map();
+		matrix.put("Very High",{"Negligible":"Medium","Minor":"High","Moderate":"High","Significant":"Critical","Severe":"Critical"});
+		matrix.put("High",{"Negligible":"Low","Minor":"Medium","Moderate":"High","Significant":"Critical","Severe":"Critical"});
+		matrix.put("Medium",{"Negligible":"Low","Minor":"Medium","Moderate":"Medium","Significant":"High","Severe":"Critical"});
+		matrix.put("Low",{"Negligible":"Very Low","Minor":"Low","Moderate":"Medium","Significant":"High","Severe":"High"});
+		matrix.put("Very Low",{"Negligible":"Very Low","Minor":"Low","Moderate":"Low","Significant":"Medium","Severe":"High"});
+		today = zoho.currentdate;
+		// task trend (portfolio): tasks due / completed per month "yyyy-MM"
+		dueByMonth = Map();
+		doneByMonth = Map();
+		assigned = List();
+		teamAssignments = 0;
+		rows = List();
+		for each  projRec in Project[ID != 0] sort by Project_Reference
+		{
+			eid = ifnull(projRec.Accepted_Estimate,0);
+			m = {"ID":projRec.ID.toString(),"Project_Reference":ifnull(projRec.Project_Reference,""),"Project_Name":ifnull(projRec.Project_Name,""),"Type_of_Project":ifnull(projRec.Type_of_Project,""),"Project_Value_PO":ifnull(projRec.Project_Value_PO,0),"Total_Budget_Cost":ifnull(projRec.Total_Budget_Cost,0),"Estimated_Margin":ifnull(projRec.Estimated_Margin,0),"Estimate_Value_Sub_Total":ifnull(projRec.Estimate_Value_Sub_Total,0)};
+			if(projRec.Project_Completion_Date != null)
+			{
+				m.put("Project_Completion_Date",projRec.Project_Completion_Date.toString("dd-MMM-yyyy"));
+			}
+			if(projRec.Project_Status != null)
+			{
+				m.put("Project_Status",{"ID":projRec.Project_Status.toString(),"zc_display_value":projRec.Project_Status.Status_Name});
+			}
+			if(projRec.Client_Name != null)
+			{
+				m.put("Client_Name",{"ID":projRec.Client_Name.toString(),"zc_display_value":projRec.Client_Name.Customer_Name});
+			}
+			if(projRec.Project_Manager != null)
+			{
+				m.put("Project_Manager",{"ID":projRec.Project_Manager.toString(),"zc_display_value":projRec.Project_Manager.Name});
+			}
+			if(projRec.Start_Date != null)
+			{
+				m.put("Start_Date",projRec.Start_Date.toString("dd-MMM-yyyy"));
+			}
+			// tasks = Task records under a task list (Parent_Task set); task lists (no parent) are containers.
+			// done = Actual Complete Date, 100 %, or a Complete / Closed status; overdue = open and Task End Date passed
+			tasksTotal = 0;
+			tasksDone = 0;
+			tasksOverdue = 0;
+			tasksStarted = 0;
+			for each  taskRec in Task[Project_Name == projRec.ID && Parent_Task != null]
+			{
+				tasksTotal = tasksTotal + 1;
+				taskStatus = "";
+				if(taskRec.Task_Status != null)
+				{
+					taskStatus = ifnull(taskRec.Task_Status.Status_Name,"").toLowerCase();
+				}
+				isDone = taskRec.Actual_Complete_Date != null || ifnull(taskRec.Precent_Complete,0) >= 100;
+				if(taskStatus.contains("complete") || taskStatus.contains("closed"))
+				{
+					isDone = true;
+				}
+				if(taskRec.Task_End_Date != null)
+				{
+					dueKey = taskRec.Task_End_Date.toString("yyyy-MM");
+					dueByMonth.put(dueKey,ifnull(dueByMonth.get(dueKey),0) + 1);
+				}
+				if(taskRec.Actual_Complete_Date != null)
+				{
+					doneKey = taskRec.Actual_Complete_Date.toString("yyyy-MM");
+					doneByMonth.put(doneKey,ifnull(doneByMonth.get(doneKey),0) + 1);
+				}
+				if(isDone)
+				{
+					tasksDone = tasksDone + 1;
+				}
+				else
+				{
+					if(taskRec.Task_End_Date != null)
+					{
+						if(taskRec.Task_End_Date < today)
+						{
+							tasksOverdue = tasksOverdue + 1;
+						}
+					}
+					if(ifnull(taskRec.Precent_Complete,0) > 0)
+					{
+						tasksStarted = tasksStarted + 1;
+					}
+				}
+			}
+			m.put("tasks_total",tasksTotal);
+			m.put("tasks_done",tasksDone);
+			m.put("tasks_overdue",tasksOverdue);
+			m.put("tasks_in_progress",tasksStarted);
+			// milestones (Milestone form): planned start = project Start Date + Starts after (Days / Weeks / Months),
+			// planned end = start + Duration − 1 days. Delayed = not Complete / Closed and planned end passed.
+			msTotal = 0;
+			msDone = 0;
+			delayed = 0;
+			for each  planRec in Milestone[Project == projRec.ID]
+			{
+				msTotal = msTotal + 1;
+				msStatus = "";
+				if(planRec.Status != null)
+				{
+					msStatus = ifnull(planRec.Status.Status_Name,"").toLowerCase();
+				}
+				msClosed = msStatus.contains("complete") || msStatus.contains("closed");
+				if(msClosed)
+				{
+					msDone = msDone + 1;
+				}
+				else if(projRec.Start_Date != null)
+				{
+					afterValue = ifnull(planRec.Starts_after,0);
+					msStart = projRec.Start_Date.addDay(afterValue);
+					if(ifnull(planRec.Starts_After_In,"") == "Weeks")
+					{
+						msStart = projRec.Start_Date.addDay(afterValue * 7);
+					}
+					else if(ifnull(planRec.Starts_After_In,"") == "Months")
+					{
+						msStart = projRec.Start_Date.addMonth(afterValue);
+					}
+					durationDays = ifnull(planRec.Duration,1);
+					if(durationDays < 1)
+					{
+						durationDays = 1;
+					}
+					msEnd = msStart.addDay(durationDays - 1);
+					if(msEnd < today)
+					{
+						delayed = delayed + 1;
+					}
+				}
+			}
+			m.put("milestones_total",msTotal);
+			m.put("milestones_done",msDone);
+			m.put("milestones_delayed",delayed);
+			// open critical risks (Project_Risk): not Complete / Closed, matrix severity Critical
+			criticalRisks = 0;
+			openRisks = 0;
+			for each  riskRec in Project_Risk[Project_Name == projRec.ID]
+			{
+				riskStatus = "";
+				if(riskRec.Risk_Status != null)
+				{
+					riskStatus = ifnull(riskRec.Risk_Status.Status_Name,"").toLowerCase();
+				}
+				probability = ifnull(riskRec.Probability,"");
+				riskOpen = !riskStatus.contains("complete") && !riskStatus.contains("closed");
+				if(riskOpen)
+				{
+					openRisks = openRisks + 1;
+				}
+				if(riskOpen && matrix.containKey(probability))
+				{
+					if(ifnull(matrix.get(probability).get(ifnull(riskRec.Impact,"")),"") == "Critical")
+					{
+						criticalRisks = criticalRisks + 1;
+					}
+				}
+			}
+			m.put("risks_critical",criticalRisks);
+			m.put("risks_open",openRisks);
+			// asset lines (Project lookup OR accepted estimate), delivered counted in memory
+			linesTotal = 0;
+			linesDelivered = 0;
+			for each  lineRec in Costing_Lineitem[Project == projRec.ID || Cost_Analysis == eid]
+			{
+				linesTotal = linesTotal + 1;
+				if(deliveredIds.contains(lineRec.Delivery_Status) || deliveredIds.contains(lineRec.Installation_Status))
+				{
+					linesDelivered = linesDelivered + 1;
+				}
+			}
+			m.put("lines_total",linesTotal);
+			m.put("lines_delivered",linesDelivered);
+			for each  teamRow in projRec.Pro
+			{
+				teamAssignments = teamAssignments + 1;
+				if(teamRow.Team_Member != null && !assigned.contains(teamRow.Team_Member))
+				{
+					assigned.add(teamRow.Team_Member);
+				}
+			}
+			rows.add(m);
+		}
+		// Estimates (Cost Analysis), latest versions: for "Search by reference" — always opens the Cost Analysis
+		estimates = List();
+		for each  estRec in Estimate[Latest_version == true] sort by Project_Reference
+		{
+			estMap = {"ID":estRec.ID.toString(),"Quote_No":ifnull(estRec.Quote_No,""),"Version":ifnull(estRec.Version,""),"Project_Reference":ifnull(estRec.Project_Reference,""),"Deal_Owner":ifnull(estRec.Deal_Owner,""),"Deal_Stage":ifnull(estRec.Deal_Stage,""),"Country_Name":ifnull(estRec.Country_Name,""),"Total":ifnull(estRec.Total,0)};
+			if(estRec.Date_field != null)
+			{
+				estMap.put("Date_field",estRec.Date_field.toString("dd-MMM-yyyy"));
+			}
+			if(estRec.Status != null)
+			{
+				estMap.put("Status",estRec.Status.Status_Name);
+			}
+			if(estRec.Customer_Name != null)
+			{
+				estMap.put("Customer_Name",estRec.Customer_Name.Customer_Name);
+			}
+			linked = Project[Accepted_Estimate == estRec.ID];
+			if(linked.count() == 0 && estRec.Deals != null)
+			{
+				versionIds = Estimate[Deals == estRec.Deals].ID.getAll();
+				linked = Project[Accepted_Estimate in versionIds];
+			}
+			projectId = "";
+			if(linked.count() > 0)
+			{
+				projectId = linked.ID.toString();
+			}
+			estMap.put("project_id",projectId);
+			estimates.add(estMap);
+		}
+		loginRec = Users[Email == zoho.loginuserid];
+		userName = zoho.loginuser;
+		if(loginRec.count() > 0 && ifnull(loginRec.Name,"") != "")
+		{
+			userName = loginRec.Name;
+		}
+		order = thisapp.Widget.status_order();
+		response = {"status":"success","records":rows,"stage_order":order.get("project"),"tasks_due_by_month":dueByMonth,"tasks_done_by_month":doneByMonth,"estimates":estimates,"user":userName,"users_total":Users[ID != 0].count(),"users_active":Users[Status == "Active"].count(),"users_assigned":assigned.size(),"team_assignments":teamAssignments};
+	}
+	catch (e)
+	{
+		response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+	}
+	return response;
+}
