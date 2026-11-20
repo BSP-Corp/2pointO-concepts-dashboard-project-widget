@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ErrorPanel, Panel } from '@/features/console/ui'
 import { useActivity } from '@/features/projects/api'
 import type { ActivityEntry } from '@/types/domain'
 import type { TabContext } from '../ProjectTabs'
 
-const MODULES = ['All', 'Project', 'Milestone', 'Task', 'BOQ', 'Risk'] as const
+const MODULES = ['All', 'Project', 'Milestone', 'Task', 'BOQ', 'Risk', 'Asset'] as const
 const WEEKDAY = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const dayTitle = (iso: string) => {
   if (!iso) return 'Undated'
@@ -70,16 +70,31 @@ export function ActivityList({ rows, showRecord = true }: { rows: ActivityEntry[
   )
 }
 
+/** Words of the search, all of which must appear in the change (record, field, values, person, module, date). */
+export function matchesSearch(a: ActivityEntry, search: string) {
+  const words = search.toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return true
+  const text = [a.recordName, a.recordId, a.module, a.field, a.oldValue, a.newValue, a.by, a.action, dayTitle(a.at)].join(' ').toLowerCase()
+  return words.every((w) => text.includes(w))
+}
+
 /**
- * Activity stream (Activity_Stream form): who changed what and when — projects, milestones, tasks, procurement lines
- * and risks. Every save made through the widget is logged by the Deluge functions.
+ * Activity stream: one Activity_Stream record per project whose Activity data subform holds every change made through
+ * the widget (projects, milestones, tasks, BOQ, assets, risks). Search, module, person and date filters run here.
  */
 export function ActivityTab(c: TabContext) {
   const q = useActivity(c.project.id)
   const [module, setModule] = useState<(typeof MODULES)[number]>('All')
+  const [search, setSearch] = useState('')
+  const [person, setPerson] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const people = useMemo(() => [...new Set((q.data ?? []).map((a) => a.by).filter(Boolean))].sort(), [q.data])
   if (q.error) return <ErrorPanel error={q.error} onRetry={() => q.refetch()} />
   if (!q.data) return <div className="gc-skeleton" style={{ height: 200 }} aria-busy="true" aria-label="Loading activity" />
-  const rows = module === 'All' ? q.data : q.data.filter((a) => a.module === module)
+  const all = q.data
+  const rows = all.filter((a) => (module === 'All' || a.module === module) && (!person || a.by === person) && (!from || a.at >= from) && (!to || a.at <= to) && matchesSearch(a, search))
+  const filtered = rows.length !== all.length
   return (
     <Panel
       title="Activity stream"
@@ -93,7 +108,34 @@ export function ActivityTab(c: TabContext) {
         </span>
       }
     >
-      {rows.length === 0 ? <div className="gc-empty">No activity yet — changes appear here as soon as they are saved.</div> : <ActivityList rows={rows} />}
+      <div className="gc-activity-filters" role="search">
+        <input type="search" className="gc-input" placeholder="Search record, field, value or person…" aria-label="Search activity" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select className="gc-input" aria-label="Changed by" value={person} onChange={(e) => setPerson(e.target.value)}>
+          <option value="">Everyone</option>
+          {people.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+        <input type="date" className="gc-input" aria-label="From date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} />
+        <input type="date" className="gc-input" aria-label="To date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} />
+        <span className="gc-small gc-soft" aria-live="polite">
+          {filtered ? `${rows.length} of ${all.length} changes` : `${all.length} changes`}
+        </span>
+        {filtered && (
+          <button type="button" className="gc-link gc-small" onClick={() => (setModule('All'), setSearch(''), setPerson(''), setFrom(''), setTo(''))}>
+            Clear filters
+          </button>
+        )}
+      </div>
+      {all.length === 0 ? (
+        <div className="gc-empty">No activity yet — changes appear here as soon as they are saved.</div>
+      ) : rows.length === 0 ? (
+        <div className="gc-empty">No changes match these filters.</div>
+      ) : (
+        <ActivityList rows={rows} />
+      )}
     </Panel>
   )
 }

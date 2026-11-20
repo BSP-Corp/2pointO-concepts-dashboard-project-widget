@@ -6,3 +6,9 @@ dist
 *.log
 .env
 .env.local
+node_modules.nosync
+
+# Finder duplicates and local session folder
+node_modules */
+node_modules [0-9]*
+Project widget/

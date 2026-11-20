@@ -1,92 +1,71 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { useIsFetching, useQueryClient } from '@tanstack/react-query'
 import type { Nav } from '@/features/console/ConsoleApp'
-import { ErrorPanel, SectionSkeleton } from '@/features/console/ui'
-import { TopBar } from '@/features/console/TopBar'
-import { useCostingLines, useOptions, useProcurement, useProject, useProjectDetails, useUpdateBoq } from '@/features/projects/api'
-import { buildBoq, daysBetween, isDeliveredStatus, isNotOrderedStatus, localToday, wpTag, type BoqRow } from '@/features/project/model'
+import { ColumnPicker } from '@/features/console/ColumnPicker'
+import { Chip, CountBadge, ErrorPanel, SectionSkeleton } from '@/features/console/ui'
+import { ProjectHeader } from '@/features/console/ProjectHeader'
+import {
+  useBulkBoqStatus,
+  useCostingLines,
+  usePoPayments,
+  useOptions,
+  usePlanMilestones,
+  useProcurement,
+  useProject,
+  useProjectDetails,
+  useRetryBooksSync,
+  useRisks,
+  useTasks,
+  useUpdateBoq,
+} from '@/features/projects/api'
+import { useDataSource } from '@/lib/data/DataSourceProvider'
+import { buildBoq, buildMilestones, health, localToday, wpTag } from '@/features/project/model'
+import { isComplete, severityOf } from '@/features/risk/calc'
 import { NotFoundError } from '@/lib/data/zohoSource'
-import { formatDate, formatMoney, formatQty, sortByOrder } from '@/lib/utils'
-import type { PoLine, Project, ProjectDetails, PurchaseOrder } from '@/types/domain'
-import { CreatePoDrawer } from './CreatePoDrawer'
-import { ItemDialog } from './ItemDialog'
+import { queryKeys } from '@/lib/query-keys'
+import { currencyCode, formatMoney, sortByOrder, storage } from '@/lib/utils'
+import type { Project, ProjectDetails } from '@/types/domain'
+import { CreateDeliveryNotePanel, DeliveryNoteDetailPanel } from './DeliveryNotePanel'
+import { ProcurementGrid } from './ProcurementGrid'
+import { PurchaseOrderPanel } from './PurchaseOrderPanel'
+import { ReceivePanel } from './ReceivePanel'
+import { BulkStatus, StockPanel } from './ProcurementExtras'
+import { DeliveryNoteList, InWarehouseList, PurchaseOrderList, ReceiptList } from './RecordSheets'
+import { PoPayments } from './PoPayments'
+import { CORE, SECTIONS, buildSchedule, type CoreKey, type ScheduleRow, type SectionKey } from './schedule'
 
 const BOQ_STATUSES = { key: 'boqStatuses', report: '', label: '' }
-type Tab = 'all' | 'order' | 'progress' | 'received'
-const ROW_H = 46
+const VENDORS = { key: 'vendors', report: '', label: '' }
+const COLUMNS_KEY = '2point0:procurement-columns'
 
-/** One schedule row: the BOQ line plus what its POs say (ordered, received, value, issued by). */
-export interface ScheduleRow extends BoqRow {
-  orders: PurchaseOrder[]
-  poLines: PoLine[]
-  received: number
-  poValue: number
-}
-
-function buildSchedule(rows: BoqRow[], orders: PurchaseOrder[], poLines: PoLine[]): ScheduleRow[] {
-  return rows.map((r) => {
-    const mine = orders.filter((o) => o.boqIds.includes(r.line.id))
-    const ids = new Set(mine.map((o) => o.id))
-    const lines = r.line.productId ? poLines.filter((l) => ids.has(l.purchaseOrderId) && l.itemId === r.line.productId) : []
-    return { ...r, orders: mine, poLines: lines, received: lines.reduce((s, l) => s + l.quantityReceived, 0), poValue: lines.reduce((s, l) => s + l.amount, 0) }
-  })
-}
-
-/** Status → soft colour (never blue / red): delivered green, transit teal, ordered violet, not ordered amber. */
-export const statusTone = (status: string) => (isDeliveredStatus(status) ? 'green' : isNotOrderedStatus(status) ? 'amber' : /order/i.test(status) ? 'violet' : 'teal')
-
-/** Rows that fit the window without scrolling the page; recalculated on resize. */
-function useRowsPerPage() {
-  const calc = () => Math.max(4, Math.min(25, Math.floor(((typeof window === 'undefined' ? 800 : window.innerHeight) - 360) / ROW_H)))
-  const [n, setN] = useState(calc)
-  useEffect(() => {
-    const on = () => setN(calc())
-    window.addEventListener('resize', on)
-    return () => window.removeEventListener('resize', on)
-  }, [])
-  return n
-}
+type Panel = { kind: 'po' } | { kind: 'receive'; poId: string; lineId?: string } | { kind: 'dn-new' } | { kind: 'dn'; id: string } | { kind: 'stock'; id: string } | null
 
 /**
- * Procurement Schedule — its own Creator page (Procurement_Schedule?procurement_project_id=<ID>), opened from the Project
- * Widget's Procurement button. A compact list (one row per BOQ item from the approved Cost Analysis) that fits the screen
- * — no page scrolling, no wide table; a row opens its details and fields (Purchasing · Transit · Receiving) in a popup.
- * Tick lines of one vendor → Create purchase order (Creator first, then Zoho Books). Stock moves only through goods receipt.
+ * Procurement Schedule — its own Creator page (Procurement_Schedule?procurement_project_id=<ID>), the working module for
+ * purchasing (PPT 4a: the project tab only shows results). Replicates the 2point0 Ops procurement register: frozen core
+ * columns, five colour-banded sections with bookmarks that scroll sideways, a Columns menu, box-shaped inline fields, and
+ * left side panels for purchase orders, goods receipts and delivery notes. Stock moves only through goods receipt.
  */
 export function ProcurementPage({ projectId, nav }: { projectId: string; nav: Nav }) {
   const valid = /^\d{1,25}$/.test(projectId)
   const project = useProject(valid ? projectId : '0')
   const details = useProjectDetails(valid ? projectId : '0')
   const notFound = !valid || project.error instanceof NotFoundError
+  const qc = useQueryClient()
+  const refreshing = useIsFetching({ queryKey: queryKeys.projects.detail(projectId) }) > 0
+  // Everything of the project (schedule, POs, receipts, notes, header) and the lists (bays' free space, vendors…)
+  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: queryKeys.projects.detail(projectId) }), qc.invalidateQueries({ queryKey: ['options'] })])
   return (
     <main className="gc-main gc-proc">
-      <nav className="gc-topbar" aria-label="Breadcrumb">
-        <ol className="gc-crumbs">
-          <li>
-            <button type="button" className="gc-link" onClick={nav.home}>
-              Project Search
-            </button>
-          </li>
-          {!notFound && (
-            <li>
-              <button type="button" className="gc-link" onClick={() => nav.project(projectId)}>
-                {project.data?.reference || '…'}
-              </button>
-            </li>
-          )}
-          <li aria-current="page">Procurement Schedule</li>
-        </ol>
-        <div className="gc-topbar__actions">
-          {!notFound && (
-            <button type="button" className="gc-btn" onClick={() => nav.project(projectId)}>
-              ← Back to project
-            </button>
-          )}
-          <button type="button" className="gc-btn" onClick={nav.home}>
-            ⌂ Home
-          </button>
-          <TopBar name={details.data?.user} />
-        </div>
-      </nav>
+      <ProjectHeader
+        project={notFound ? undefined : project.data}
+        page="Procurement"
+        user={details.data?.user}
+        onHome={nav.home}
+        onProject={notFound ? undefined : () => nav.project(projectId)}
+        onRefresh={notFound ? undefined : refresh}
+        refreshing={refreshing}
+      />
       {notFound ? (
         <div className="gc-panel gc-notice gc-notfound" role="alert">
           <strong>Project not found</strong>
@@ -99,278 +78,435 @@ export function ProcurementPage({ projectId, nav }: { projectId: string; nav: Na
       ) : !project.data || !details.data ? (
         <SectionSkeleton label="Loading procurement" />
       ) : (
-        <Schedule project={project.data} details={details.data} />
+        <Register project={project.data} details={details.data} />
       )}
     </main>
   )
 }
 
-function Schedule({ project, details }: { project: Project; details: ProjectDetails }) {
-  const { boq, orders, poLines } = useProcurement(project)
+/** Eye icon on the schedule: Pick and the core (PO) columns */
+const PO_COLUMNS = [{ key: 'pick', label: 'Pick' }, ...CORE.map((c) => ({ key: c.key, label: c.label }))]
+
+/** `only`: the sections shown when not all are (unticking hides a section); [] = every section, all ticked */
+function loadColumns(): { only: SectionKey[]; core: CoreKey[]; pick: boolean } {
+  try {
+    const v = JSON.parse(storage.get(COLUMNS_KEY) || 'null') as { only?: unknown; core?: unknown; pick?: unknown } | null
+    const only = Array.isArray(v?.only) ? (v!.only as SectionKey[]).filter((k) => SECTIONS.some((s) => s.key === k)) : []
+    const core = Array.isArray(v?.core) ? (v!.core as CoreKey[]).filter((k) => CORE.some((c) => c.key === k)) : []
+    return { only, core, pick: v?.pick === false }
+  } catch {
+    return { only: [], core: [], pick: false }
+  }
+}
+
+function Register({ project, details }: { project: Project; details: ProjectDetails }) {
+  const { boq, orders, poLines, receipts, deliveryNotes } = useProcurement(project)
+  const payments = usePoPayments(
+    project.id,
+    useMemo(() => orders.data?.map((o) => o.id), [orders.data]),
+  )
   const lines = useCostingLines(project)
   const update = useUpdateBoq(project)
+  const bulk = useBulkBoqStatus(project)
+  const retry = useRetryBooksSync(project.id)
+  const ds = useDataSource()
+  const tasks = useTasks(project)
+  const planMilestones = usePlanMilestones(project)
+  const risks = useRisks(project.id)
   const statuses = useOptions(BOQ_STATUSES)
+  const vendors = useOptions(VENDORS)
   const statusOptions = sortByOrder(statuses.data ?? [], details.boqOrder)
-  const [tab, setTab] = useState<Tab>('all')
-  const [groupBy, setGroupBy] = useState<'vendor' | 'model' | 'package' | 'none'>('vendor')
+  const [groupBy, setGroupBy] = useState<'vendor' | 'package' | 'none'>('vendor')
   const [vendor, setVendor] = useState('')
+  const [pkg, setPkg] = useState('')
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
-  const [creating, setCreating] = useState(false)
-  const [openId, setOpenId] = useState<string | null>(null)
-  const [page, setPage] = useState(0)
-  const perPage = useRowsPerPage()
-  const today = localToday()
+  const [panel, setPanel] = useState<Panel>(null)
+  const [only, setOnly] = useState<SectionKey[]>(() => loadColumns().only)
+  const [hiddenCore, setHiddenCore] = useState<CoreKey[]>(() => loadColumns().core)
+  const [hidePick, setHidePick] = useState(() => loadColumns().pick)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const hiddenSections = only.length ? SECTIONS.filter((s) => !only.includes(s.key)).map((s) => s.key) : []
+  /** Ticked = shown: all are ticked by default (nothing stored) */
+  const shown = only.length ? only : SECTIONS.map((s) => s.key)
 
   const rows = useMemo(
-    () => (boq.data && lines.data && orders.data && poLines.data ? buildSchedule(buildBoq(boq.data, lines.data, orders.data, poLines.data).rows, orders.data, poLines.data) : undefined),
-    [boq.data, lines.data, orders.data, poLines.data],
+    () =>
+      boq.data && lines.data && orders.data && poLines.data && deliveryNotes.data
+        ? buildSchedule(buildBoq(boq.data, lines.data, orders.data, poLines.data).rows, orders.data, poLines.data, deliveryNotes.data)
+        : undefined,
+    [boq.data, lines.data, orders.data, poLines.data, deliveryNotes.data],
   )
-  useEffect(() => setPage(0), [tab, vendor, groupBy, perPage])
-  const error = boq.error ?? lines.error ?? orders.error ?? poLines.error
-  if (error) return <ErrorPanel error={error} onRetry={() => (boq.refetch(), lines.refetch(), orders.refetch(), poLines.refetch())} />
-  if (!rows || !orders.data) return <SectionSkeleton label="Loading procurement schedule" />
 
-  const state = (r: ScheduleRow): Tab => (r.line.quantity > 0 && r.received >= r.line.quantity ? 'received' : r.procured > 0 ? 'progress' : 'order')
-  const counts = { all: rows.length, order: rows.filter((r) => state(r) === 'order').length, progress: rows.filter((r) => state(r) === 'progress').length, received: rows.filter((r) => state(r) === 'received').length }
-  const vendors = [...new Set(rows.map((r) => r.line.vendor).filter(Boolean))].sort()
-  const key = (r: ScheduleRow) => (groupBy === 'vendor' ? r.line.vendor || 'No vendor' : groupBy === 'model' ? r.line.model || r.line.sku || 'No model' : groupBy === 'package' ? wpTag(r.line.workPackage) || 'No package' : '')
-  const visible = rows.filter((r) => (tab === 'all' || state(r) === tab) && (!vendor || r.line.vendor === vendor)).sort((a, b) => key(a).localeCompare(key(b)))
-  const pages = Math.max(1, Math.ceil(visible.length / perPage))
-  const shown = visible.slice(page * perPage, page * perPage + perPage)
+  const saveColumns = (sections: SectionKey[], core: CoreKey[], noPick = hidePick) => {
+    setOnly(sections)
+    setHiddenCore(core)
+    setHidePick(noPick)
+    storage.set(COLUMNS_KEY, JSON.stringify({ only: sections, core, pick: !noPick }))
+  }
+
+  const error = boq.error ?? lines.error ?? orders.error ?? poLines.error ?? deliveryNotes.error ?? receipts.error
+  if (error) return <ErrorPanel error={error} onRetry={() => (boq.refetch(), lines.refetch(), orders.refetch(), poLines.refetch(), deliveryNotes.refetch(), receipts.refetch())} />
+  if (!rows || !orders.data || !poLines.data || !deliveryNotes.data) return <SectionSkeleton label="Loading procurement schedule" />
+
+  const counts = {
+    order: rows.filter((r) => r.state === 'order').length,
+    progress: rows.filter((r) => r.state === 'progress').length,
+    received: rows.filter((r) => r.state === 'received').length,
+  }
+  const vendorNames = [...new Set(rows.map((r) => r.line.vendor).filter(Boolean))].sort()
+  const packagesOf = (r: ScheduleRow) =>
+    r.line.workPackage
+      .split(/[,;]/)
+      .map((w) => wpTag(w))
+      .filter(Boolean)
+  const packageNames = [...new Set(rows.flatMap(packagesOf))].sort()
+  const groupOf = groupBy === 'none' ? null : (r: ScheduleRow) => (groupBy === 'vendor' ? r.line.vendor || 'No vendor' : wpTag(r.line.workPackage) || 'No package')
+  const visible = rows.filter((r) => (!vendor || r.line.vendor === vendor) && (!pkg || packagesOf(r).includes(pkg))).sort((a, b) => (groupOf ? groupOf(a).localeCompare(groupOf(b)) : 0))
   const vendorKey = (r: ScheduleRow) => r.line.vendorId || r.line.vendor
   const chosen = rows.filter((r) => selected.has(r.line.id))
   const chosenVendor = chosen[0] ? vendorKey(chosen[0]) : ''
+  const pickBlock = (r: ScheduleRow) =>
+    !r.line.productId
+      ? 'No product (SKU) on this BOQ line — it cannot go on a PO'
+      : r.left <= 0
+        ? 'Fully ordered'
+        : !r.line.vendorId
+          ? 'No vendor — set the vendor first'
+          : chosenVendor && vendorKey(r) !== chosenVendor
+            ? 'One vendor per purchase order'
+            : ''
+  const currency = currencyCode(project.currency)
   const poValue = orders.data.reduce((s, o) => s + o.totalCost, 0)
-  const withPo = rows.filter((r) => r.procured > 0).length
-  const toggle = (id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])))
-  const name = (r: ScheduleRow) => r.line.sku || r.line.model || r.line.description || 'Item'
-  const open = rows.find((r) => r.line.id === openId)
-  const tabs: [Tab, string, string][] = [
-    ['all', 'All', 'violet'],
-    ['order', 'To order', 'amber'],
-    ['progress', 'In progress', 'teal'],
-    ['received', 'Received', 'green'],
-  ]
+  const required = rows.reduce((t, r) => t + r.line.quantity, 0)
+  const procuredPct = required > 0 ? Math.round((rows.reduce((t, r) => t + Math.min(r.ordered, r.line.quantity), 0) / required) * 100) : 0
+  const milestones = tasks.data && planMilestones.data ? buildMilestones(planMilestones.data, tasks.data, project.startDate, localToday()) : undefined
+  const criticalOpen = risks.data?.filter((x) => !isComplete(x) && severityOf(x) === 'Critical').length ?? 0
+  const healthText = milestones ? health(milestones, criticalOpen) : ''
+  const stockRow = panel?.kind === 'stock' ? rows.find((r) => r.line.id === panel.id) : undefined
+  const dnOpen = panel?.kind === 'dn' ? deliveryNotes.data.find((d) => d.id === panel.id) : undefined
 
   return (
-    <div className="gc-proc-page">
-      <section className="gc-proc-hero" aria-label="Procurement">
-        <div className="gc-proc-hero__id">
-          <span className="gc-proc-hero__eyebrow">Procurement · one schedule, purchasing to payment</span>
-          <h1 className="gc-proc-hero__title">
-            {project.reference || '—'} <span>{project.name}</span>
-          </h1>
-          <span className="gc-small gc-soft">
-            {[project.client, project.currency].filter(Boolean).join(' · ') || '—'}
-            {project.acceptedEstimate && <span className="gc-pill gc-pill--slate">Approved quote {project.acceptedEstimate.label}</span>}
-          </span>
+    <div className="gc-pg">
+      <section className="gc-pg-headcard" aria-label="Project">
+        <div className="gc-pg-id">
+          <div className="gc-pg-ref">{project.reference || '—'}</div>
+          <div className="gc-pg-sub">{[project.name, project.client, project.acceptedEstimate && `Quote ${project.acceptedEstimate.label}`, currency].filter(Boolean).join(' · ')}</div>
+          <div className="gc-pg-facts">
+            <span>
+              PM <strong>{project.projectManager || '—'}</strong>
+            </span>
+            <span>
+              Client PO <strong>{project.clientPoNo || '—'}</strong>
+            </span>
+            <span>
+              Value <strong>{project.projectValuePo ? formatMoney(project.projectValuePo, currency) : '—'}</strong>
+            </span>
+            {project.status && <Chip>{project.status}</Chip>}
+            {healthText && <Chip tone={healthText === 'At Risk' ? 'serious' : 'good'}>Health: {healthText}</Chip>}
+          </div>
         </div>
-        <dl className="gc-proc-kpis">
-          <div className="gc-proc-kpi gc-proc-kpi--violet">
-            <dt>POs raised</dt>
-            <dd>
-              {withPo} / {rows.length}
-            </dd>
+        <dl className="gc-pg-metrics">
+          <div>
+            <dt>To order</dt>
+            <dd>{counts.order}</dd>
+            <span>lines without a PO</span>
+          </div>
+          <div>
+            <dt>On order</dt>
+            <dd>{counts.progress}</dd>
             <span>{orders.data.length} purchase orders</span>
           </div>
-          <div className="gc-proc-kpi gc-proc-kpi--teal">
-            <dt>PO value</dt>
-            <dd>{formatMoney(poValue)}</dd>
-            <span>Sum of PO totals</span>
+          <div>
+            <dt>Fully received</dt>
+            <dd>
+              {counts.received} / {rows.length}
+            </dd>
+            <span>lines</span>
           </div>
-          <div className="gc-proc-kpi gc-proc-kpi--amber">
-            <dt>Balance due</dt>
-            <dd>{formatMoney(poValue)}</dd>
-            <span>Payments are in Zoho Books</span>
+          <div>
+            <dt>PO value committed</dt>
+            <dd>{formatMoney(poValue, currency)}</dd>
+            <span>sum of PO totals</span>
           </div>
-          <div className="gc-proc-kpi gc-proc-kpi--pink">
+          <div>
+            <dt>Procurement</dt>
+            <dd>{procuredPct}%</dd>
+            <span>of the required quantity on PO</span>
+          </div>
+          <div>
             <dt>DNs issued</dt>
-            <dd>—</dd>
-            <span>No Delivery Note form yet</span>
+            <dd>{deliveryNotes.data.filter((d) => d.statusIndex !== 48).length}</dd>
+            <span>{deliveryNotes.data.filter((d) => d.statusIndex === 67).length} delivered</span>
+          </div>
+          <div>
+            <dt>BOQ source</dt>
+            <dd>
+              <span className={`gc-pg-pill gc-pg-pill--${project.acceptedEstimate ? 'moving' : 'action'}`}>
+                {project.acceptedEstimate ? `Approved quote ${project.acceptedEstimate.label}` : 'No approved quote'}
+              </span>
+            </dd>
           </div>
         </dl>
       </section>
 
-      <section className="gc-proc-card" aria-label="Procurement schedule">
-        <div className="gc-proc-toolbar">
-          <div className="gc-proc-tabs" role="tablist" aria-label="Schedule">
-            {tabs.map(([id, label, tone]) => (
-              <button key={id} type="button" role="tab" aria-selected={tab === id} className={`gc-proc-tab gc-proc-tab--${tone} ${tab === id ? 'is-on' : ''}`} onClick={() => setTab(id)}>
-                {label} {counts[id]}
-              </button>
-            ))}
-          </div>
-          <label className="gc-proc-select">
-            <span>Group</span>
+      <div className="gc-pg-bar">
+        <span className="gc-grow" />
+        {selected.size > 0 && (
+          <span className="gc-pg-picked" role="status">
+            {selected.size} picked · {chosen[0]?.line.vendor}
+            <button type="button" className="gc-link" onClick={() => setSelected(new Set())}>
+              Clear
+            </button>
+          </span>
+        )}
+        <BulkStatus
+          picked={chosen}
+          shown={visible}
+          statusOptions={statusOptions}
+          busy={bulk.isPending}
+          onApply={(list, status) => bulk.mutate({ ids: list.map((r) => ({ id: r.line.id, name: r.line.model || r.line.sku || r.line.description })), statusId: status.id, statusName: status.label })}
+        />
+        <button type="button" className="gc-pg-btn gc-pg-btn--primary" onClick={() => setPanel({ kind: 'po' })}>
+          + Create purchase order{selected.size > 0 ? ` (${selected.size})` : ''}
+        </button>
+        <button type="button" className="gc-pg-btn gc-pg-btn--dn" onClick={() => setPanel({ kind: 'dn-new' })}>
+          Create delivery note
+        </button>
+      </div>
+
+      <section className="gc-pg-card" aria-label="Procurement schedule">
+        <nav className="gc-pg-nav" aria-label="Procurement sections">
+          <label className="gc-pg-select">
+            <span>Group by</span>
             <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as typeof groupBy)} aria-label="Group by">
               <option value="vendor">Vendor</option>
-              <option value="model">Model</option>
-              <option value="package">Package</option>
+              <option value="package">Work package</option>
               <option value="none">None</option>
             </select>
           </label>
-          <label className="gc-proc-select">
+          <label className="gc-pg-select">
             <span>Vendor</span>
             <select value={vendor} onChange={(e) => setVendor(e.target.value)} aria-label="Filter by vendor">
               <option value="">All vendors</option>
-              {vendors.map((v) => (
+              {vendorNames.map((v) => (
                 <option key={v}>{v}</option>
               ))}
             </select>
           </label>
-          <span className="gc-proc-toolbar__spacer" />
-          {selected.size > 0 && (
-            <span className="gc-small gc-soft">
-              {selected.size} selected ·{' '}
-              <button type="button" className="gc-link gc-small" onClick={() => setSelected(new Set())}>
-                Clear selection
-              </button>
-            </span>
-          )}
-          <button type="button" className="gc-proc-btn gc-proc-btn--po" disabled={chosen.length === 0} onClick={() => setCreating(true)} title={chosen.length ? 'Raise one PO for the ticked lines' : 'Tick lines of one vendor first'}>
-            + Create purchase order
-          </button>
-          <button type="button" className="gc-proc-btn gc-proc-btn--dn" disabled title="Delivery notes need a Delivery Note form in Creator (not in the app yet)">
-            Create delivery note
-          </button>
-        </div>
+          <label className="gc-pg-select">
+            <span>Package</span>
+            <select value={pkg} onChange={(e) => setPkg(e.target.value)} aria-label="Filter by work package">
+              <option value="">All packages</option>
+              {packageNames.map((w) => (
+                <option key={w}>{w}</option>
+              ))}
+            </select>
+          </label>
+          <div className="gc-pg-showset" role="group" aria-label="Show sections">
+            <span>Show:</span>
+            {SECTIONS.map((sec) => (
+              <label key={sec.key}>
+                <input
+                  type="checkbox"
+                  className="gc-pg-check"
+                  checked={shown.includes(sec.key)}
+                  aria-label={`Show ${sec.label}`}
+                  onChange={(e) => {
+                    const next = e.target.checked ? [...shown, sec.key] : shown.filter((k) => k !== sec.key)
+                    // every section ticked, or none left, is the default: all sections show (stored as [])
+                    saveColumns(next.length === SECTIONS.length || next.length === 0 ? [] : SECTIONS.filter((x) => next.includes(x.key)).map((x) => x.key), hiddenCore)
+                  }}
+                />
+                {sec.label}
+              </label>
+            ))}
+          </div>
+          <span className="gc-grow" />
+          <span className="gc-small gc-soft">{visible.length} items · saves on pick / Enter</span>
+        </nav>
 
         {rows.length === 0 ? (
           <div className="gc-empty">No BOQ lines for this project — the schedule comes from the approved Cost Analysis.</div>
+        ) : visible.length === 0 ? (
+          <div className="gc-empty">No items match this vendor and package.</div>
         ) : (
-          <table className="gc-proc-list" aria-label="Procurement schedule">
-            <colgroup>
-              <col className="gc-proc-col-check" />
-              <col className="gc-proc-col-item" />
-              <col className="gc-proc-col-vendor" />
-              <col className="gc-proc-col-qty" />
-              <col className="gc-proc-col-status" />
-              <col className="gc-proc-col-eta" />
-              <col className="gc-proc-col-po" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th scope="col">
-                  <span className="gc-sr">Select</span>
-                </th>
-                <th scope="col">Item</th>
-                <th scope="col">Vendor · package</th>
-                <th scope="col">Req · ordered · received</th>
-                <th scope="col">Status</th>
-                <th scope="col">ETA</th>
-                <th scope="col">PO</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((r, i) => {
-                const b = r.line
-                const group = key(r)
-                const newGroup = groupBy !== 'none' && (i === 0 || key(shown[i - 1]) !== group)
-                const otherVendor = !!chosenVendor && vendorKey(r) !== chosenVendor
-                const eta = b.eta ? daysBetween(today, b.eta) : null
-                const late = eta !== null && eta < 0 && !isDeliveredStatus(b.status)
-                const pct = (n: number) => `${b.quantity > 0 ? Math.min(100, (n / b.quantity) * 100) : 0}%`
-                return (
-                  <Fragment key={b.id}>
-                    {newGroup && (
-                      <tr className="gc-proc-groupline">
-                        <th colSpan={7} scope="rowgroup">
-                          {group} <span>· {visible.filter((x) => key(x) === group).length}</span>
-                        </th>
-                      </tr>
-                    )}
-                    <tr className={`gc-proc-row ${selected.has(b.id) ? 'is-selected' : ''}`} onClick={() => setOpenId(b.id)}>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          className="gc-proc-check"
-                          checked={selected.has(b.id)}
-                          disabled={(otherVendor && !selected.has(b.id)) || !b.productId}
-                          title={!b.productId ? 'No product (SKU) on this BOQ line — it cannot go on a PO' : otherVendor ? 'One vendor per purchase order' : 'Select for a purchase order'}
-                          aria-label={`Select ${name(r)}`}
-                          onChange={() => toggle(b.id)}
-                        />
-                      </td>
-                      <td>
-                        <button type="button" className="gc-proc-item" aria-label={`Details of ${name(r)}`} onClick={(e) => (e.stopPropagation(), setOpenId(b.id))}>
-                          <strong>{name(r)}</strong>
-                          <span>{b.description || b.model || '—'}</span>
-                        </button>
-                      </td>
-                      <td className="gc-proc-ellipsis">
-                        {b.vendor || '—'}
-                        <span className="gc-proc-sub">{wpTag(b.workPackage) || '—'}</span>
-                      </td>
-                      <td>
-                        <span className="gc-proc-qty">
-                          {formatQty(b.quantity)} · {formatQty(r.procured)} · {formatQty(r.received)}
-                        </span>
-                        <span className="gc-proc-bar" title={`Ordered ${formatQty(r.procured)} · received ${formatQty(r.received)} of ${formatQty(b.quantity)}`}>
-                          <i className="gc-proc-bar__ordered" style={{ width: pct(r.procured) }} />
-                          <i className="gc-proc-bar__received" style={{ width: pct(r.received) }} />
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`gc-pill gc-pill--${statusTone(b.status)}`}>{b.status || 'No status'}</span>
-                      </td>
-                      <td className={late ? 'gc-proc-late' : ''}>
-                        {b.eta ? formatDate(b.eta) : '—'}
-                        {eta !== null && !isDeliveredStatus(b.status) && <span className="gc-proc-sub">{eta < 0 ? `${-eta} days late` : `in ${eta} days`}</span>}
-                      </td>
-                      <td className="gc-proc-ellipsis">
-                        {b.po || '—'}
-                        {r.poValue > 0 && <span className="gc-proc-sub">{formatMoney(r.poValue)}</span>}
-                      </td>
-                    </tr>
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
+          <ProcurementGrid
+            rows={visible}
+            groupOf={groupOf}
+            hiddenCore={hiddenCore}
+            hiddenSections={hiddenSections}
+            hidePick={hidePick}
+            columnPicker={
+              <ColumnPicker
+                label="Show or hide PO columns"
+                columns={PO_COLUMNS}
+                hidden={[...(hidePick ? ['pick'] : []), ...hiddenCore]}
+                onChange={(h) =>
+                  saveColumns(
+                    hiddenSections,
+                    h.filter((k): k is CoreKey => k !== 'pick'),
+                    h.includes('pick'),
+                  )
+                }
+              />
+            }
+            selected={selected}
+            pickBlock={pickBlock}
+            onPick={(id, on) => setSelected((s) => (on ? new Set([...s, id]) : new Set([...s].filter((x) => x !== id))))}
+            statusOptions={statusOptions}
+            statusLoading={statuses.isLoading}
+            vendors={vendors.data ?? []}
+            savingId={update.isPending ? (update.variables?.boqId ?? null) : null}
+            onSave={(r, data, optimistic) => update.mutate({ boqId: r.line.id, data, optimistic })}
+            onReceive={(r) => {
+              const open = r.poLines.find((l) => l.quantity > l.quantityReceived) ?? r.poLines[0]
+              if (open) setPanel({ kind: 'receive', poId: open.purchaseOrderId, lineId: open.quantity > open.quantityReceived ? open.id : undefined })
+            }}
+            onOpenDn={(id) => setPanel({ kind: 'dn', id })}
+            onStock={(r) => setPanel({ kind: 'stock', id: r.line.id })}
+            currency={currency}
+            scrollRef={scrollRef}
+          />
         )}
-        <div className="gc-proc-foot">
-          <span className="gc-small gc-soft">Click an item for its details and fields · stock moves only through goods receipt, never by a status or date</span>
-          {pages > 1 && (
-            <span className="gc-proc-pager">
-              <button type="button" className="gc-proc-btn gc-proc-btn--ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)} aria-label="Previous page">
-                ‹
-              </button>
-              <span className="gc-small">
-                {page * perPage + 1}–{Math.min(visible.length, (page + 1) * perPage)} of {visible.length}
-              </span>
-              <button type="button" className="gc-proc-btn gc-proc-btn--ghost" disabled={page >= pages - 1} onClick={() => setPage((p) => p + 1)} aria-label="Next page">
-                ›
-              </button>
-            </span>
-          )}
-        </div>
       </section>
 
-      {open && (
-        <ItemDialog
-          row={open}
-          statusOptions={statusOptions}
-          statusLoading={statuses.isLoading}
-          saving={update.isPending}
-          error={update.error?.message}
-          selected={selected.has(open.line.id)}
-          canSelect={!!open.line.productId && (!chosenVendor || vendorKey(open) === chosenVendor || selected.has(open.line.id))}
-          onToggleSelect={() => toggle(open.line.id)}
-          onSave={(data, optimistic) => update.mutate({ boqId: open.line.id, data, optimistic }, { onSuccess: () => setOpenId(null) })}
-          onClose={() => setOpenId(null)}
-        />
-      )}
-      {creating && (
-        <CreatePoDrawer
+      <RecordTabs
+        tabs={[
+          {
+            id: 'po',
+            label: 'Purchase Orders',
+            count: orders.data.length,
+            body: () => (
+              <PurchaseOrderList
+                orders={orders.data}
+                poLines={poLines.data}
+                currency={currency}
+                retrying={retry.isPending ? (retry.variables?.id ?? null) : null}
+                onRetry={(kind, id) => retry.mutate({ kind, id })}
+              />
+            ),
+          },
+          {
+            id: 'pr',
+            label: 'Purchase Receives',
+            count: receipts.data?.length ?? 0,
+            body: () => (
+              <>
+                <ReceiptList
+                  receipts={receipts.data ?? []}
+                  poLines={poLines.data}
+                  currency={currency}
+                  files={{ url: (f) => ds.receiptFileUrl(f), read: (f) => ds.readReceiptFile(f) }}
+                  retrying={retry.isPending ? (retry.variables?.id ?? null) : null}
+                  onRetry={(kind, id) => retry.mutate({ kind, id })}
+                />
+                <p className="gc-small gc-soft gc-pg-howto">
+                  Receive on a line: quantity, supplier delivery note number and documents and, per unit, its serial and pallet. Click a file name to open it in a new tab; Print opens it ready to
+                  print. Direct to site also creates a delivered delivery note. Stock updates only through goods receipt — not status or date changes.
+                </p>
+              </>
+            ),
+          },
+          {
+            id: 'dn',
+            label: 'Delivery Notes',
+            count: deliveryNotes.data.length,
+            body: () => (
+              <DeliveryNoteList
+                notes={deliveryNotes.data}
+                currency={currency}
+                files={{ url: (f) => ds.deliveryNoteFileUrl(f), read: (f) => ds.readDeliveryNoteFile(f) }}
+                onOpen={(id) => setPanel({ kind: 'dn', id })}
+              />
+            ),
+          },
+          {
+            id: 'stock',
+            label: 'In Warehouse',
+            count: poLines.data.reduce((t, l) => t + l.stockLocations.reduce((u, x) => u + x.qty, 0), 0),
+            body: () => <InWarehouseList poLines={poLines.data} currency={currency} />,
+          },
+          {
+            id: 'payments',
+            label: 'Payments',
+            count: orders.data.length,
+            body: () => <PoPayments projectId={project.id} orders={orders.data} payments={payments.data ?? []} currency={currency} loading={payments.isLoading} />,
+          },
+        ]}
+      />
+
+      {panel?.kind === 'stock' && stockRow && <StockPanel row={stockRow} onClose={() => setPanel(null)} />}
+      {panel?.kind === 'po' && (
+        <PurchaseOrderPanel
           project={project}
           user={details.user}
-          rows={chosen}
+          rows={rows}
+          orders={orders.data}
+          preselected={[...selected]}
           onClose={(created) => {
-            setCreating(false)
+            setPanel(null)
             if (created) setSelected(new Set())
           }}
         />
       )}
+      {panel?.kind === 'receive' && (
+        <ReceivePanel
+          projectId={project.id}
+          orders={orders.data.filter((o) => poLines.data!.some((l) => l.purchaseOrderId === o.id))}
+          poLines={poLines.data}
+          receipts={receipts.data ?? []}
+          initialPoId={panel.poId}
+          focusLineId={panel.lineId}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {panel?.kind === 'dn-new' && <CreateDeliveryNotePanel project={project} orders={orders.data} poLines={poLines.data} onClose={() => setPanel(null)} />}
+      {panel?.kind === 'dn' && dnOpen && <DeliveryNoteDetailPanel key={dnOpen.id + dnOpen.statusIndex} project={project} note={dnOpen} poLines={poLines.data} onClose={() => setPanel(null)} />}
     </div>
+  )
+}
+
+/** Purchase orders · purchase receives · delivery notes · in warehouse — one list at a time, in the Project page's tab style */
+function RecordTabs({ tabs }: { tabs: { id: string; label: string; count: number; body: () => ReactNode }[] }) {
+  const [tab, setTab] = useState(tabs[0].id)
+  const refs = useRef<(HTMLButtonElement | null)[]>([])
+  const active = tabs.find((t) => t.id === tab) ?? tabs[0]
+  const choose = (id: string) => setTab(id)
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const i = tabs.findIndex((t) => t.id === active.id)
+    const n = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : null
+    if (n === null) return
+    e.preventDefault()
+    const j = (n + tabs.length) % tabs.length
+    choose(tabs[j].id)
+    refs.current[j]?.focus()
+  }
+  return (
+    <section className="gc-panel gc-panel--flush gc-tabs-card gc-pg-records" aria-label="Procurement records">
+      <div role="tablist" aria-label="Procurement records" className="gc-tabs" onKeyDown={onKeyDown}>
+        {tabs.map((t, i) => (
+          <button
+            key={t.id}
+            ref={(el) => {
+              refs.current[i] = el
+            }}
+            type="button"
+            role="tab"
+            id={`gc-pg-tab-${t.id}`}
+            aria-selected={t.id === active.id}
+            aria-controls="gc-pg-tabpanel"
+            tabIndex={t.id === active.id ? 0 : -1}
+            className={`gc-tab ${t.id === active.id ? 'is-on' : ''}`}
+            onClick={() => choose(t.id)}
+          >
+            {t.label}
+            <CountBadge n={t.count} />
+          </button>
+        ))}
+      </div>
+      <div id="gc-pg-tabpanel" role="tabpanel" aria-labelledby={`gc-pg-tab-${active.id}`} className="gc-tabpanel" key={active.id}>
+        {active.body()}
+      </div>
+    </section>
   )
 }

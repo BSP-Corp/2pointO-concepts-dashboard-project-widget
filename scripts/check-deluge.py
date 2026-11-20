@@ -4,14 +4,20 @@
 import sys,re,glob
 L=open(sys.argv[1],encoding='utf-8').read().split('\n')
 FORMS_END = next((i for i,l in enumerate(L) if re.match(r'^\t\t(default )?list \w+\s*$', l)), len(L))
-forms={};targets={};cur=None;field=None
+forms={};targets={};cur=None;field=None;inside=False
 for i,l in enumerate(L[:FORMS_END]):
     t=l.strip()
+    if t==')' and len(l)-len(l.lstrip('\t'))==3: inside=False
     m=re.match(r'^form (\w+)$',t)
     if m: cur=m.group(1); forms[cur]={'ID','Added_Time','Modified_Time','Added_User'}; continue
     m=re.match(r'^(must have\s+)?(unique\s+)?([A-Za-z_][A-Za-z0-9_]*)$',t)
     if cur and m and i+1<len(L) and L[i+1].strip()=='(':
-        field=m.group(3); forms[cur].add(field)
+        indent=len(l)-len(l.lstrip('\t'))
+        if indent>=4 and field and inside:
+            # field of an inline subform (type = grid with its fields inside): a pseudo form "Form.Grid"
+            sub=cur+'.'+field; forms.setdefault(sub,{'ID'}).add(m.group(3)); targets[(cur,field)]=sub
+            continue
+        field=m.group(3); forms[cur].add(field); inside=True
     m=re.match(r'^values\s*=\s*(\w+)(\[.*\])?\.ID',t)
     if cur and field and m: targets[(cur,field)]=m.group(1)
 # Forms you still have to create in Creator (docs/creator/new_forms.json) count as existing
@@ -23,6 +29,7 @@ if os.path.exists(NEW):
         forms.setdefault(name,{'ID','Added_Time','Modified_Time','Added_User'}).update(spec['fields'])
         for fld,t in spec.get('lookups',{}).items(): targets[(name,fld)]=t
 ADDR={'address_line_1','address_line_2','district_city','state_province','postal_code','postal_Code','country','latitude','longitude'}
+NAMEPART={'prefix','first_name','last_name','suffix'}
 errors=0
 for f in sorted(glob.glob(sys.argv[2]+'/*.dg')):
     src=open(f).read(); code=re.sub(r'//.*','',src)
@@ -73,6 +80,7 @@ for f in sorted(glob.glob(sys.argv[2]+'/*.dg')):
             if b in ADDR: 
                 if b not in ADDR: print(f,'BAD ADDRESS PART',b); errors+=1
                 continue
+            if b in NAMEPART: continue
             t=targets.get((form,a))
             if not t: print(f,'NOT A LOOKUP',form+'.'+a,'.',b); errors+=1
             elif b not in forms[t]: print(f,'BAD LOOKUP FIELD',form+'.'+a,'->',t+'.'+b); errors+=1

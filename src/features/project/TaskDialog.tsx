@@ -1,19 +1,37 @@
 import { useState } from 'react'
-import { Disclosure, ErrorPanel, Modal } from '@/features/console/ui'
+import { DateInput } from '@/features/console/DateInput'
+import { Disclosure, ErrorPanel, SidePanel } from '@/features/console/ui'
 import { useActivity, useOptions, useUpdateTask } from '@/features/projects/api'
 import { toCreatorDate } from '@/lib/data/zohoSource'
 import { formatDate, sortByOrder } from '@/lib/utils'
 import { descendants, durationOf, rootOf, wpTag } from './model'
 import { ActivityList } from './tabs/ActivityTab'
 import type { PlanMilestone, TeamMember, WorkTask } from '@/types/domain'
-import { MilestoneMap } from './MilestoneMap'
 
 export const TASK_STATUSES = { key: 'taskStatuses', report: '', label: '' }
 
-/** Task popup: details + edit. Closing returns to the same tab, project and accordion state. */
-export function TaskDialog({ task, all, team, projectId, canEdit, order, plan, onClose }: { task: WorkTask; all: WorkTask[]; team: TeamMember[]; projectId: string; canEdit: boolean; order: string[]; plan?: PlanMilestone[]; onClose: () => void }) {
+/** Task details + edit in a right side panel (PPT: side panels, not pop-ups). Closing returns to the same tab and state. */
+export function TaskDialog({
+  task,
+  all,
+  team,
+  projectId,
+  canEdit,
+  order,
+  plan,
+  onClose,
+}: {
+  task: WorkTask
+  all: WorkTask[]
+  team: TeamMember[]
+  projectId: string
+  canEdit: boolean
+  order: string[]
+  plan?: PlanMilestone[]
+  onClose: () => void
+}) {
   const statuses = useOptions(TASK_STATUSES, canEdit)
-  const update = useUpdateTask(projectId)
+  const update = useUpdateTask(projectId, { inline: true })
   const [start, setStart] = useState(task.startDate)
   const [end, setEnd] = useState(task.endDate)
   const [status, setStatus] = useState(task.status?.id ?? '')
@@ -23,6 +41,7 @@ export function TaskDialog({ task, all, team, projectId, canEdit, order, plan, o
   const [name, setName] = useState(task.name)
   const [description, setDescription] = useState(task.description)
   const [parent, setParent] = useState(task.parent?.id ?? '')
+  const [milestone, setMilestone] = useState(task.milestone?.id ?? '')
   const [hours, setHours] = useState(task.workHours ? String(task.workHours) : '')
   // Parent: a task list or another task of this project (never itself or one of its own subtasks)
   const own = new Set([task.id, ...descendants(all, task.id).map((t) => t.id)])
@@ -43,21 +62,26 @@ export function TaskDialog({ task, all, team, projectId, canEdit, order, plan, o
     if (name.trim() && name.trim() !== task.name) data.Task_Name = name.trim()
     if (description !== task.description) data.Task_Description = description
     if (parent !== (task.parent?.id ?? '')) data.Parent_Task = parent
+    if (milestone !== (task.milestone?.id ?? '')) data.Milestone = milestone
     if (hours !== (task.workHours ? String(task.workHours) : '')) data.Work_Hours = hours
     if (Object.keys(data).length === 0) return onClose()
     update.mutate({ taskId: task.id, data }, { onSuccess: onClose })
   }
 
   return (
-    <Modal title={task.name || 'Task'} onClose={onClose} wide>
+    <SidePanel title={task.name || 'Task'} side="right" busy={update.isPending} onClose={onClose} className="gc-side--task">
       <dl className="gc-dl">
         <div>
           <dt>Type</dt>
           <dd>{task.type || '—'}</dd>
         </div>
         <div>
-          <dt>Task list</dt>
-          <dd>{task.parent ? rootOf(all, task).name : 'This is a task list'}</dd>
+          <dt>Milestone</dt>
+          <dd>{task.milestone?.label || '—'}</dd>
+        </div>
+        <div>
+          <dt>Under</dt>
+          <dd>{task.parent ? rootOf(all, task).name : '— (top level)'}</dd>
         </div>
         <div>
           <dt>Work package</dt>
@@ -94,15 +118,21 @@ export function TaskDialog({ task, all, team, projectId, canEdit, order, plan, o
           <span className="gc-label">Task description</span>
           <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
         </label>
-        {!task.parent && plan && (
-          <div className="gc-field">
-            <span className="gc-label">Milestone of this task list (saved at once)</span>
-            <MilestoneMap list={task} plan={plan} projectId={projectId} disabled={!canEdit} />
-          </div>
-        )}
+        <label className="gc-field">
+          <span className="gc-label">Milestone</span>
+          <select value={milestone} onChange={(e) => setMilestone(e.target.value)}>
+            <option value="">— No milestone —</option>
+            {task.milestone && !(plan ?? []).some((m) => m.id === task.milestone!.id) && <option value={task.milestone.id}>{task.milestone.label}</option>}
+            {(plan ?? []).map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </label>
         {task.parent && (
-          <label className="gc-field">
-            <span className="gc-label">Parent (task list or task)</span>
+          <label className="gc-field gc-po-grid__wide">
+            <span className="gc-label">Parent (work package or task)</span>
             <select value={parent} onChange={(e) => setParent(e.target.value)}>
               {parents.map(({ t, list }) => (
                 <option key={t.id} value={t.id}>
@@ -119,11 +149,11 @@ export function TaskDialog({ task, all, team, projectId, canEdit, order, plan, o
         </label>
         <label className="gc-field">
           <span className="gc-label">Start date</span>
-          <input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+          <DateInput value={start} onChange={(e) => setStart(e.target.value)} />
         </label>
         <label className="gc-field">
           <span className="gc-label">Due date</span>
-          <input type="date" value={end} min={start || undefined} onChange={(e) => setEnd(e.target.value)} />
+          <DateInput value={end} min={start || undefined} onChange={(e) => setEnd(e.target.value)} />
         </label>
         <label className="gc-field">
           <span className="gc-label">Status</span>
@@ -194,7 +224,7 @@ export function TaskDialog({ task, all, team, projectId, canEdit, order, plan, o
       <Disclosure header={<strong>Activity stream</strong>}>
         <TaskActivity projectId={projectId} taskId={task.id} />
       </Disclosure>
-    </Modal>
+    </SidePanel>
   )
 }
 

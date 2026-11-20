@@ -45,6 +45,15 @@ export interface BoqRow {
   issues: string[]
 }
 
+/**
+ * PO lines of a BOQ line: by PO_Line_Items.BOQ when the line has it (POs raised from the widget), else — older lines —
+ * by product on a PO that lists the BOQ line.
+ */
+export function linesForBoq(b: BoqLine, orders: PurchaseOrder[], poLines: PoLine[]): PoLine[] {
+  const orderIds = new Set(orders.filter((o) => o.boqIds.includes(b.id)).map((o) => o.id))
+  return poLines.filter((l) => (l.boqId ? l.boqId === b.id : !!b.productId && orderIds.has(l.purchaseOrderId) && l.itemId === b.productId))
+}
+
 export function buildBoq(boq: BoqLine[], lines: CostingLine[], orders: PurchaseOrder[], poLines: PoLine[]): { rows: BoqRow[]; total: number } {
   const byId = new Map(lines.map((l) => [l.id, l]))
   const rows = boq.map((b) => {
@@ -54,9 +63,8 @@ export function buildBoq(boq: BoqLine[], lines: CostingLine[], orders: PurchaseO
     const rate = qty > 0 ? price / qty : null
     const unitCost = qty > 0 ? assets.reduce((s, l) => s + l.totalCost, 0) / qty : null
     const amount = rate === null ? 0 : b.quantity * rate
-    const orderIds = new Set(orders.filter((o) => o.boqIds.includes(b.id)).map((o) => o.id))
-    // PO lines are matched to the BOQ line by product; a BOQ line without a product cannot be matched (flagged below).
-    const procured = b.productId ? poLines.filter((l) => orderIds.has(l.purchaseOrderId) && l.itemId === b.productId).reduce((s, l) => s + l.quantity, 0) : 0
+    // A BOQ line without a product cannot be put on a PO or matched to older PO lines (flagged below).
+    const procured = linesForBoq(b, orders, poLines).reduce((s, l) => s + l.quantity, 0)
     const delivered = assets.filter(lineDelivered).reduce((s, l) => s + l.quantity, 0)
     const inTransit = assets.filter(lineInTransit).reduce((s, l) => s + l.quantity, 0)
     const issues: string[] = []
@@ -90,14 +98,17 @@ export const unlinkedAssets = (lines: CostingLine[], boq: BoqLine[]) => {
 }
 
 // ── tasks & milestones ──
-// Creator (Tasks.Create_Project_Tasks): Milestone records; a Task without Parent_Task is a task list (its name = the
-// milestone's Task_List template name); its children are tasks, their children subtasks. Type_field: Task / Work Package.
-export const isTaskList = (t: WorkTask) => !t.parent
+// Milestone & Task redesign (Creator): every Task has a Milestone lookup; a Work Package root (Type "Work Package", no
+// Parent_Task, e.g. "AV01 | Area_System Name") groups its tasks; sub-tasks sit under their Parent_Task. No task list rows.
+/** A work package root: the group row of its tasks (not a task itself) */
+export const isPackageRoot = (t: WorkTask) => !t.parent && /work package/i.test(t.type)
+/** Group rows (work package roots) are not counted as tasks */
+export const isTaskList = isPackageRoot
 const closedStatus = (t: WorkTask) => /complete|closed/i.test(t.status?.label ?? '')
 export const isDone = (t: WorkTask) => !!t.actualEnd || t.percent >= 100 || closedStatus(t)
 export const isDelayed = (t: WorkTask, today: string) => !isDone(t) && !!t.endDate && (t.actualEnd || today) > t.endDate
 export const PRIORITY_RANK: Record<string, number> = { High: 0, Medium: 1, Low: 2 }
-/** Work tasks = everything under a task list (tasks and subtasks). */
+/** Work tasks = every task except the work package group rows. */
 export const workTasks = (tasks: WorkTask[]) => tasks.filter((t) => !isTaskList(t))
 export const childrenOf = (tasks: WorkTask[], id: string) => tasks.filter((t) => t.parent?.id === id)
 export function descendants(tasks: WorkTask[], id: string): WorkTask[] {
@@ -113,7 +124,7 @@ export function descendants(tasks: WorkTask[], id: string): WorkTask[] {
   walk(id, new Set([id]))
   return out
 }
-/** The task list (root) a task belongs to. */
+/** The top task (no parent) a task sits under. */
 export function rootOf(tasks: WorkTask[], t: WorkTask): WorkTask {
   let cur = t
   const seen = new Set<string>()
@@ -125,6 +136,32 @@ export function rootOf(tasks: WorkTask[], t: WorkTask): WorkTask {
   }
   return cur
 }
+
+/**
+ * Tasks of one milestone (groupTasksByMilestone of the redesign): roots = its tasks without a parent, or whose parent is in
+ * another milestone; work package roots become groups, the other roots show straight under the milestone. `tasks` = every
+ * task shown under it (roots and their sub-tasks), without the work package group rows.
+ */
+export function milestoneTasks(tasks: WorkTask[], milestoneId: string | null) {
+  const own = tasks.filter((t) => (milestoneId ? t.milestone?.id === milestoneId : !t.milestone && !t.parent))
+  const ids = new Set(own.map((t) => t.id))
+  const roots = own.filter((t) => !t.parent || !ids.has(t.parent.id) || !milestoneId)
+  const packages = roots.filter(isPackageRoot)
+  const direct = roots.filter((t) => !isPackageRoot(t))
+  const seen = new Set<string>()
+  const under: WorkTask[] = []
+  for (const r of roots) for (const t of [r, ...descendants(tasks, r.id)]) if (!seen.has(t.id) && !isPackageRoot(t)) (seen.add(t.id), under.push(t))
+  return { packages, roots: direct, tasks: under }
+}
+
+/** Work package groups across the project (Execution → Asset): each work package root with its tasks and sub-tasks */
+export function workPackageGroups(tasks: WorkTask[]) {
+  return tasks
+    .filter(isPackageRoot)
+    .sort((a, b) => wpTag(a.workPackage || a.name).localeCompare(wpTag(b.workPackage || b.name)) || a.name.localeCompare(b.name))
+    .map((root) => ({ root, tasks: descendants(tasks, root.id) }))
+}
+
 /** Short work package tag: "AV02: [DS-01 …]" → "AV02". */
 export const wpTag = (wp: string) => wp.split(/[:|[]/)[0].trim()
 
@@ -163,36 +200,33 @@ export interface MilestoneRow {
   milestone: PlanMilestone
   start: string
   end: string
-  /** Task lists (root Tasks) named like the milestone's Task_List */
-  lists: WorkTask[]
-  /** Tasks and subtasks under those lists */
+  /** Work package roots of this milestone (Project Execution: AV-01, AV-02…), their tasks under them */
+  packages: WorkTask[]
+  /** Tasks straight under the milestone (sub-tasks under them) */
+  roots: WorkTask[]
+  /** Every task under the milestone (roots, work package tasks, sub-tasks) */
   tasks: WorkTask[]
   done: number
   /** % of its tasks done (closed ÷ total), as Zoho Projects */
   progress: number
   state: MilestoneState
 }
-const norm2 = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
 const milestoneClosed = (m: PlanMilestone) => /complete|closed/i.test(m.status?.label ?? '')
+
+/** The Project Execution milestone */
+export const isExecution = (m: PlanMilestone) => /project execution/i.test(m.name)
 
 export function buildMilestones(plan: PlanMilestone[], tasks: WorkTask[], projectStart: string, today: string): MilestoneRow[] {
   return plan.map((m) => {
     const start = milestoneStart(projectStart, m.startsAfter, m.startsAfterIn)
     const end = endFromDuration(start, Math.max(1, m.duration))
-    const lists = m.taskList ? tasks.filter((t) => isTaskList(t) && norm2(t.name) === norm2(m.taskList)) : []
-    const under = lists.flatMap((l) => descendants(tasks, l.id))
+    const { packages, roots, tasks: under } = milestoneTasks(tasks, m.id)
     const done = under.filter(isDone).length
     const progress = under.length ? (done / under.length) * 100 : milestoneClosed(m) ? 100 : 0
     const completed = milestoneClosed(m) || (under.length > 0 && done === under.length)
     const state: MilestoneState = completed ? 'Completed' : !!end && end < today ? 'Delayed' : progress > 0 || (!!start && start <= today) ? 'In Progress' : 'Not Started'
-    return { milestone: m, start, end, lists, tasks: under, done, progress, state }
+    return { milestone: m, start, end, packages, roots, tasks: under, done, progress, state }
   })
-}
-
-/** Task lists not linked to any milestone (shown in an "Other task lists" group). */
-export const unlinkedLists = (rows: MilestoneRow[], tasks: WorkTask[]) => {
-  const linked = new Set(rows.flatMap((r) => r.lists.map((l) => l.id)))
-  return tasks.filter((t) => isTaskList(t) && !linked.has(t.id))
 }
 
 /**
@@ -237,11 +271,12 @@ export function teamWithToday(team: TeamMember[], today: WorkTask[]) {
 }
 
 /** Task data issues: shown flagged, never hidden. `linkedLists` = IDs of task lists that belong to a milestone. */
-export function taskIssues(t: WorkTask, all: WorkTask[], teamIds: Set<string>, linkedLists?: Set<string>): string[] {
+export function taskIssues(t: WorkTask, all: WorkTask[], teamIds: Set<string>, milestoneIds?: Set<string>): string[] {
   const issues: string[] = []
   if (t.startDate && t.endDate && t.endDate < t.startDate) issues.push('Due date is before the start date')
   if (t.parent && !all.some((x) => x.id === t.parent!.id)) issues.push('Parent task is not in this project')
-  if (linkedLists && isTaskList(t) && !linkedLists.has(t.id)) issues.push('Task list is not linked to a milestone')
+  if (milestoneIds && !t.parent && !t.milestone) issues.push('No milestone — set it in the task')
+  if (milestoneIds && t.milestone && !milestoneIds.has(t.milestone.id)) issues.push('Milestone is not in this project')
   const outside = t.owners.filter((o) => !teamIds.has(o.id)).map((o) => o.label)
   if (outside.length) issues.push(`Not on the project team: ${outside.join(', ')}`)
   return issues

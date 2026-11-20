@@ -1,0 +1,97 @@
+void Delivery.Recalc_Parent_Delivered(int parent_id)
+{
+	parent = PO_Line_Items[ID == parent_id];
+	if(parent.count() == 0)
+	{
+		return;
+	}
+	delivered = 0;
+	dn_units = List();
+	for each  c in PO_Line_Items[Parent_Line_ID == parent_id && is_DN == true] sort by Added_Time
+	{
+		if(c.Delivery_Note != null)
+		{
+			dn_rec = Delivery_Note[ID == c.Delivery_Note];
+			if(dn_rec.count() > 0 && dn_rec.Status != null && dn_rec.Status.Index_field == 67)
+			{
+				q = ifnull(c.Qty_to_Deliver,0);
+				delivered = delivered + q;
+				if(q > 0)
+				{
+					units = leftpad("1",q.toLong()).replaceAll(" ","1,").toList();
+					for each  u in units
+					{
+						dn_units.add(dn_rec.ID);
+					}
+				}
+			}
+		}
+	}
+	site_delivered = 0;
+	for each  site_copy in PO_Line_Items[Parent_Line_ID == parent_id && is_PR == true]
+	{
+		site_delivered = site_delivered + ifnull(site_copy.Already_Delivered,0);
+	}
+	parent.Already_Delivered=delivered + site_delivered;
+	parent.Available_Qty=ifnull(parent.Quantity_Received,0) - parent.Already_Delivered;
+	pr_copy_ids = PO_Line_Items[Parent_Line_ID == parent_id && is_PR == true].ID.getAll();
+	remaining = delivered;
+	unit_idx = 0;
+	wh_list = List();
+	if(pr_copy_ids.size() > 0)
+	{
+		for each  srow in Storage[PR_Line in pr_copy_ids && Purchase_Receive != null] sort by ID
+		{
+			q = ifnull(srow.Qty,0);
+			take = 0;
+			if(remaining > 0)
+			{
+				take = if(remaining > q,q,remaining);
+			}
+			remaining = remaining - take;
+			srow.Delivered_Qty=take;
+			if(srow.Segment == null)
+			{
+				srow.Stock_Status="Pending Put-away";
+			}
+			else if(q - take > 0)
+			{
+				srow.Stock_Status="In Stock";
+			}
+			else if(take > 0)
+			{
+				srow.Stock_Status="Delivered";
+			}
+			else
+			{
+				srow.Stock_Status="Empty";
+			}
+			if(srow.Warehouse != null && !wh_list.contains(srow.Warehouse))
+			{
+				wh_list.add(srow.Warehouse);
+			}
+			n = 0;
+			for each  sr in GRN_Serial[Storage == srow.ID] sort by ID
+			{
+				n = n + 1;
+				if(n <= take)
+				{
+					sr.Serial_Status="Delivered";
+					if(unit_idx < dn_units.size())
+					{
+						sr.Delivery_Note=dn_units.get(unit_idx);
+					}
+					unit_idx = unit_idx + 1;
+				}
+				else
+				{
+					sr.Serial_Status="Available";
+					sr.Delivery_Note=null;
+				}
+			}
+		}
+	}
+	for each  wh in wh_list
+	{
+		thisapp.Stock.Recalc_Warehouse(wh);
+	}

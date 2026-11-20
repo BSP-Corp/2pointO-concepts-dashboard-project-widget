@@ -1,0 +1,267 @@
+map Widget.deal_estimate(string quo_data)
+{
+	response = Map();
+	try 
+	{
+		req = Map();
+		if(quo_data != null)
+		{
+			if(quo_data.trim() != "")
+			{
+				req = quo_data.trim().toMap();
+			}
+		}
+		action = ifnull(req.get("action"),"").toString();
+		if(action == "list")
+		{
+			pageNo = 1;
+			pageText = ifnull(req.get("page"),"1").toString();
+			if(pageText.isNumber())
+			{
+				pageNo = pageText.toLong();
+			}
+			if(pageNo < 1)
+			{
+				pageNo = 1;
+			}
+			perPage = 100;
+			offsetNo = (pageNo - 1) * perPage;
+			searchText = ifnull(req.get("search"),"").toString().trim();
+			searchText = searchText.replaceAll("['%]","");
+			whereText = "Quote_ID is null";
+			matchText = "";
+			coqlHeaders = Map();
+			if(searchText != "")
+			{
+				likeText = "'%" + searchText + "%'";
+				matchText = "((((Deal_Name like " + likeText + ") or (Project_Reference like " + likeText + ")) or (Account_Name.Account_Name like " + likeText + ")) or (Stage like " + likeText + "))";
+				upperText = searchText.toUpperCase();
+				if(upperText != searchText)
+				{
+					upperLike = "'%" + upperText + "%'";
+					matchText = "((" + matchText + " or (Project_Reference like " + upperLike + ")) or (Deal_Name like " + upperLike + "))";
+				}
+				amountRest = searchText.toUpperCase().replaceAll("AED|SAR|USD|BHD|OMR|QAR|KWD|[0-9.,\\s]","");
+				amountText = searchText.replaceAll("[^0-9.]","");
+				amountDots = amountText.replaceAll("[0-9]","").length();
+				amountDigits = amountText.replaceAll("[^0-9]","");
+				if(amountRest == "" && amountDigits != "" && amountDots <= 1)
+				{
+					matchText = "(" + matchText + " or (Amount = " + amountText + "))";
+				}
+				whereText = "(Quote_ID is null) and " + matchText;
+			}
+			coqlQuery = "select id, Deal_Name, Account_Name.Account_Name, Stage, Project_Reference, Amount, Closing_Date from Deals where " + whereText + " order by Modified_Time desc limit " + offsetNo.toString() + ", 101";
+			coqlParams = Map();
+			coqlParams.put("select_query",coqlQuery);
+			coqlHeaders.put("Content-Type","application/json");
+			coqlRes = invokeurl
+			[
+				url :"https://www.zohoapis.com/crm/v2/coql"
+				type :POST
+				parameters:coqlParams.toString()
+				headers:coqlHeaders
+				connection:"z_crm"
+			];
+			coqlText = ifnull(coqlRes,"").toString().trim();
+			coqlRes = Map();
+			if(coqlText != "")
+			{
+				coqlRes = coqlText.toMap();
+			}
+			dealList = List();
+			moreDeals = false;
+			coqlRows = ifnull(coqlRes.get("data"),List());
+			rowNo = 0;
+			for each  coqlRow in coqlRows
+			{
+				rowNo = rowNo + 1;
+				if(rowNo <= perPage)
+				{
+					dealItem = Map();
+					dealItem.put("id",ifnull(coqlRow.get("id"),"").toString());
+					dealItem.put("name",ifnull(coqlRow.get("Deal_Name"),""));
+					dealItem.put("account",ifnull(coqlRow.get("Account_Name.Account_Name"),""));
+					dealItem.put("stage",ifnull(coqlRow.get("Stage"),""));
+					dealItem.put("reference",ifnull(coqlRow.get("Project_Reference"),""));
+					dealItem.put("amount",ifnull(coqlRow.get("Amount"),0));
+					dealItem.put("closing",ifnull(coqlRow.get("Closing_Date"),""));
+					dealList.add(dealItem);
+				}
+				else
+				{
+					moreDeals = true;
+				}
+			}
+			if(coqlRes.get("code") != null)
+			{
+				if(coqlRes.get("code").toString() != "SUCCESS")
+				{
+					thisapp.Creator.log_addition(zoho.loginuser,"Widget.deal_estimate",coqlQuery,coqlRes.toString(),"","");
+					response.put("status","error");
+					response.put("message",coqlRes.toString());
+				}
+			}
+			doneList = List();
+			if(searchText != "" && pageNo == 1)
+			{
+				if(response.get("status") != "error")
+				{
+					doneQuery = "select id, Deal_Name, Account_Name.Account_Name, Stage, Project_Reference, Amount, Closing_Date, Quote_ID from Deals where (Quote_ID is not null) and " + matchText + " order by Modified_Time desc limit 0, 10";
+					doneParams = Map();
+					doneParams.put("select_query",doneQuery);
+					doneRes = invokeurl
+					[
+						url :"https://www.zohoapis.com/crm/v2/coql"
+						type :POST
+						parameters:doneParams.toString()
+						headers:coqlHeaders
+						connection:"z_crm"
+					];
+					doneText = ifnull(doneRes,"").toString().trim();
+					doneMap = Map();
+					if(doneText != "")
+					{
+						doneMap = doneText.toMap();
+					}
+					doneRows = ifnull(doneMap.get("data"),List());
+					for each  doneRow in doneRows
+					{
+						doneQuote = ifnull(doneRow.get("Quote_ID"),"").toString().trim();
+						if(doneQuote != "")
+						{
+							doneItem = Map();
+							doneItem.put("id",ifnull(doneRow.get("id"),"").toString());
+							doneItem.put("name",ifnull(doneRow.get("Deal_Name"),""));
+							doneItem.put("account",ifnull(doneRow.get("Account_Name.Account_Name"),""));
+							doneItem.put("stage",ifnull(doneRow.get("Stage"),""));
+							doneItem.put("reference",ifnull(doneRow.get("Project_Reference"),""));
+							doneItem.put("amount",ifnull(doneRow.get("Amount"),0));
+							doneItem.put("closing",ifnull(doneRow.get("Closing_Date"),""));
+							doneItem.put("quote_id",doneQuote);
+							doneList.add(doneItem);
+						}
+					}
+				}
+			}
+			if(response.get("status") != "error")
+			{
+				response.put("status","success");
+				response.put("deals",dealList);
+				response.put("existing",doneList);
+				response.put("more",moreDeals);
+				response.put("page",pageNo);
+			}
+		}
+		else if(action == "create")
+		{
+			dealId = ifnull(req.get("deal_id"),"").toString().trim();
+			if(dealId == "" || dealId.isNumber() == false)
+			{
+				response.put("status","error");
+				response.put("code","INVALID");
+				response.put("message","Deal ID is missing or invalid");
+			}
+			else
+			{
+				dealData = zoho.crm.getRecordById("Deals",dealId.toLong(),Map(),"crm");
+				if(dealData == null || dealData.get("id") == null)
+				{
+					response.put("status","error");
+					response.put("code","NOT_FOUND");
+					response.put("message","Deal not found in CRM");
+				}
+				else if(ifnull(dealData.get("Quote_ID"),"").toString() != "")
+				{
+					response.put("status","success");
+					response.put("id",dealData.get("Quote_ID").toString());
+					response.put("existing",true);
+				}
+				else
+				{
+					estMap = Map();
+					estMap.put("Deals",dealData.get("id"));
+					if(dealData.get("Account_Name") != null)
+					{
+						estt = dealData.get("Account_Name");
+						estMap.put("Accounts",estt.get("id"));
+					}
+					if(dealData.get("Contact_Name") != null)
+					{
+						dealDD = dealData.get("Contact_Name");
+						estMap.put("Contacts",dealDD.get("id"));
+					}
+					estMap.put("Date_field",zoho.currentdate.toString("dd-MMM-yyyy"));
+					estMap.put("Project_Reference",dealData.get("Project_Reference"));
+					estMap.put("Deal_Stage",dealData.get("Stage"));
+					estMap.put("Country_Name",dealData.get("Country"));
+					if(dealData.get("Owner") != null)
+					{
+						dealD = dealData.get("Owner");
+						estMap.put("Deal_Owner",dealD.get("name"));
+					}
+					payload = Map();
+					payload.put("data",estMap);
+					createHeaders = Map();
+					createHeaders.put("Content-Type","application/json");
+					createHeaders.put("environment","development");
+					createRes = invokeurl
+					[
+						url :"https://www.zohoapis.com/creator/v2.1/data/2point0concepts/point0concepts/form/Estimate"
+						type :POST
+						parameters:payload.toString()
+						headers:createHeaders
+						connection:"zoho_creator"
+					];
+					createCode = ifnull(createRes.get("code"),"").toString();
+					if(createCode == "3000")
+					{
+						crea = createRes.get("data");
+						newQuoteId = ifnull(crea.get("ID"),"").toString();
+						if(newQuoteId != "")
+						{
+							updateMap = Map();
+							updateMap.put("Quote_ID",newQuoteId);
+							crmUpdate = zoho.crm.updateRecord("Deals",dealId.toLong(),updateMap,Map(),"crm");
+							crmMessage = "";
+							if(crmUpdate.get("id") == null)
+							{
+								crmMessage = "Cost analysis created, but CRM Deal was not updated: " + crmUpdate.toString();
+								thisapp.Creator.log_addition(zoho.loginuser,"Widget.deal_estimate",updateMap.toString(),crmUpdate.toString(),dealId,"");
+							}
+							response.put("status","success");
+							response.put("id",newQuoteId);
+							response.put("existing",false);
+							response.put("Warning",crmMessage);
+						}
+						else
+						{
+							response.put("status","error");
+							response.put("code","CREATOR");
+							response.put("message","Creator returned success but no Estimate ID was found");
+						}
+					}
+					else
+					{
+						thisapp.Creator.log_addition(zoho.loginuser,"Widget.deal_estimate",payload.toString(),createRes.toString(),dealId,"");
+						response.put("status","error");
+						response.put("code","CREATOR");
+						response.put("message","Cost analysis could not be created. Check Developer_Log");
+					}
+				}
+			}
+		}
+		else
+		{
+			response.put("status","error");
+			response.put("code","INVALID");
+			response.put("message","Unknown action: " + action);
+		}
+	}	catch (e)
+	{
+		response.put("status","error");
+		response.put("code","EXCEPTION");
+		response.put("message",e.toString());
+	}
+	return response;
+}

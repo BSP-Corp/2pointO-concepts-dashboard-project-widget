@@ -1,0 +1,117 @@
+map Widget.po_payment_save(string quo_data)
+{
+	response = Map();
+	try
+	{
+		req = Map();
+		if(quo_data != null && quo_data.trim() != "")
+		{
+			req = quo_data.trim().toMap();
+		}
+		action = ifnull(req.get("action"),"").toString();
+		if(action == "add")
+		{
+			poText = ifnull(req.get("po_id"),"").toString();
+			amountText = ifnull(req.get("amount"),"").toString().trim();
+			dateText = ifnull(req.get("date"),"").toString().trim();
+			referenceText = ifnull(req.get("reference"),"").toString().trim();
+			noteText = ifnull(req.get("note"),"").toString().trim();
+			errors = List();
+			payPoRec = Purchase_Order[ID == 0];
+			if(poText.isNumber())
+			{
+				payPoRec = Purchase_Order[ID == poText.toLong()];
+			}
+			if(payPoRec.count() == 0)
+			{
+				errors.add("Choose an existing purchase order of this project.");
+			}
+			payAmount = 0.0;
+			if(amountText.matches("[0-9]+([.][0-9]{1,2})?"))
+			{
+				payAmount = amountText.toDecimal();
+			}
+			if(payAmount <= 0)
+			{
+				errors.add("Enter a positive amount with no more than two decimal places.");
+			}
+			payDate = null;
+			if(dateText != "")
+			{
+				payDate = dateText.toDate();
+			}
+			if(payDate == null)
+			{
+				errors.add("Enter a valid payment date.");
+			}
+			if(errors.size() == 0)
+			{
+				paidSoFar = 0.0;
+				for each  paidRec in Payment_Made[Purchase_Order == payPoRec.ID]
+				{
+					paidSoFar = paidSoFar + ifnull(paidRec.Amount,0).toDecimal();
+				}
+				poBalance = (ifnull(payPoRec.Total_Cost,0).toDecimal() - paidSoFar).round(2);
+				if(payAmount > poBalance)
+				{
+					errors.add("Payment exceeds the remaining balance of " + poBalance.toString() + ".");
+				}
+			}
+			if(errors.size() > 0)
+			{
+				response = {"status":"error","code":"INVALID","message":errors.toString(" ")};
+			}
+			else
+			{
+				newPayId = insert into Payment_Made
+				[
+					Added_User=zoho.loginuser
+					Payment_Date=payDate
+					Amount=payAmount
+					Reference_No=referenceText
+					Payment_Note=noteText
+					Purchase_Order=payPoRec.ID
+					Vendor=payPoRec.Vendor_Name
+					Payment_Country=payPoRec.Country
+				];
+				response = {"status":"success","id":newPayId.toString()};
+			}
+		}
+		else if(action == "delete")
+		{
+			payText = ifnull(req.get("payment_id"),"").toString();
+			delPayRec = Payment_Made[ID == 0];
+			if(payText.isNumber())
+			{
+				delPayRec = Payment_Made[ID == payText.toLong()];
+			}
+			if(delPayRec.count() == 0)
+			{
+				response = {"status":"error","code":"NOT_FOUND","message":"Payment not found."};
+			}
+			else
+			{
+				inBooks = ifnull(delPayRec.UAE_ZB_ID,"").trim() != "" || ifnull(delPayRec.SAR_ZB_ID,"").trim() != "";
+				if(inBooks == true)
+				{
+					response = {"status":"error","code":"LOCKED","message":"This payment is already in Zoho Books — delete it there."};
+				}
+				else
+				{
+					delPayId = delPayRec.ID;
+					delete from Payment_Made[ID == delPayId];
+					response = {"status":"success","id":payText};
+				}
+			}
+		}
+		else
+		{
+			response = {"status":"error","code":"INVALID","message":"Unknown action: " + action};
+		}
+	}
+	catch (e)
+	{
+		response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+	}
+	return response;
+}

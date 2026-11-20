@@ -7,8 +7,26 @@ export function cn(...inputs: ClassValue[]) {
 
 // Currency fields in the .ds are of type AED; amounts use Indian digit grouping (1,25,76,000) as specified.
 const money = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 })
-/** "AED 1,25,76,000"; null / NaN → "—" */
-export const formatMoney = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '—' : `AED ${money.format(Math.round(n))}`)
+/** Project currency (Creator Currency name such as "UAE Dirham" or a code) → ISO code; AED when not set */
+export const currencyCode = (c?: string | null) => {
+  const v = (c ?? '').trim()
+  if (/^[A-Z]{3}$/.test(v)) return v
+  if (/riyal|saudi|\bSAR\b/i.test(v)) return 'SAR'
+  if (/dollar|\bUSD\b/i.test(v)) return 'USD'
+  if (/euro|\bEUR\b/i.test(v)) return 'EUR'
+  return 'AED'
+}
+/** "AED 1,25,76,000" (or the project's currency); null / NaN → "—" */
+export const formatMoney = (n: number | null | undefined, currency?: string | null) => (n == null || !Number.isFinite(n) ? '—' : `${currencyCode(currency)} ${money.format(Math.round(n))}`)
+/** Units of each currency per 1 USD — the same fixed rates as Widget.get_cost_analysis / get_work_packages in Creator */
+export const USD_RATES: Record<string, number> = { USD: 1, AED: 3.6725, SAR: 3.75, BHD: 0.376, OMR: 0.3845, QAR: 3.64, KWD: 0.307 }
+/** Amount in the project currency → USD (null when the currency has no rate) */
+export const toUsd = (n: number, currency?: string | null) => {
+  const rate = USD_RATES[currencyCode(currency)]
+  return rate ? n / rate : null
+}
+const usd = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
+export const formatUsd = (n: number | null) => (n == null || !Number.isFinite(n) ? '—' : `USD ${usd.format(Math.round(n))}`)
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 export const formatCompact = (n: number) => compact.format(n)
 const qty = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 })

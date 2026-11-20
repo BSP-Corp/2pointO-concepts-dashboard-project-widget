@@ -1,6 +1,3 @@
-// Widget.activity_values(string module, string record_id) — the tracked fields of one record as {"Label":"text"}.
-// Called before and after a save; Widget.activity_add logs every label whose text changed. No Custom API.
-// module: Project | Milestone | Task | BOQ | Risk | Asset
 map Widget.activity_values(string module, string record_id)
 {
 	values = Map();
@@ -24,6 +21,12 @@ map Widget.activity_values(string module, string record_id)
 			values.put("Priority",ifnull(actTask.Priority,""));
 			values.put("Completion %",ifnull(actTask.Precent_Complete,"").toString());
 			values.put("Work hours",ifnull(actTask.Work_Hours,"").toString());
+			taskMsName = "";
+			if(actTask.Milestone != null)
+			{
+				taskMsName = ifnull(actTask.Milestone.Milestone_Name,"");
+			}
+			values.put("Milestone",taskMsName);
 			values.put("Billing type",ifnull(actTask.Billing_Type,""));
 			statusName = "";
 			if(actTask.Task_Status != null)
@@ -70,12 +73,6 @@ map Widget.activity_values(string module, string record_id)
 				ownerName = ifnull(actMilestone.Owner.Name,"");
 			}
 			values.put("Owner",ownerName);
-			listName = "";
-			if(actMilestone.Task_List != null)
-			{
-				listName = ifnull(actMilestone.Task_List.Task_Name,"");
-			}
-			values.put("Task list",listName);
 		}
 	}
 	else if(module == "BOQ")
@@ -209,6 +206,24 @@ map Widget.activity_values(string module, string record_id)
 				managerName = ifnull(actProject.Project_Manager.Name,"");
 			}
 			values.put("Project manager",managerName);
+			teamNames = List();
+			for each  actTeamRow in actProject.Pro
+			{
+				if(actTeamRow.Team_Member != null)
+				{
+					actMember = Users[ID == actTeamRow.Team_Member];
+					actRoleName = "";
+					if(actTeamRow.Project_Role != null)
+					{
+						actRoleName = ifnull(actTeamRow.Project_Role.Role,"");
+					}
+					if(actMember.count() > 0)
+					{
+						teamNames.add(ifnull(actMember.Name,"") + if(actRoleName == "",""," (" + actRoleName + ")"));
+					}
+				}
+			}
+			values.put("Project team",teamNames.toString(", "));
 		}
 	}
 	return values;

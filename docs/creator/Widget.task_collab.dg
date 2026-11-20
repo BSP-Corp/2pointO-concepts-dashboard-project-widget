@@ -1,0 +1,172 @@
+map Widget.task_collab(string quo_data)
+{
+	response = Map();
+	try
+	{
+		req = Map();
+		if(quo_data != null && quo_data.trim() != "")
+		{
+			req = quo_data.trim().toMap();
+		}
+		action = ifnull(req.get("action"),"").toString();
+		taskText = ifnull(req.get("task_id"),"").toString();
+		collabTaskRec = Task[ID == 0];
+		if(taskText.isNumber())
+		{
+			collabTaskRec = Task[ID == taskText.toLong()];
+		}
+		if(collabTaskRec.count() == 0)
+		{
+			response = {"status":"error","code":"NOT_FOUND","message":"Task not found"};
+		}
+		else if(action == "list")
+		{
+			notes = List();
+			for each  noteRec in Task_Note[Task == collabTaskRec.ID] sort by Added_Time
+			{
+				noteMap = {"ID":noteRec.ID.toString(),"Comment":ifnull(noteRec.Comment,""),"Author":ifnull(noteRec.Author,""),"Added_Time":noteRec.Added_Time.toString("dd-MMM-yyyy HH:mm:ss"),"Reply_To":""};
+				if(noteRec.Reply_To != null)
+				{
+					noteMap.put("Reply_To",noteRec.Reply_To.toString());
+				}
+				notes.add(noteMap);
+			}
+			files = List();
+			for each  taskFileRec in Task_File[Task == collabTaskRec.ID] sort by Added_Time
+			{
+				fileMap = {"ID":taskFileRec.ID.toString(),"File_Name":ifnull(taskFileRec.File_Name,""),"File":ifnull(taskFileRec.File_field,"").toString(),"Note":""};
+				if(taskFileRec.Task_Note != null)
+				{
+					fileMap.put("Note",taskFileRec.Task_Note.toString());
+				}
+				files.add(fileMap);
+			}
+			response = {"status":"success","notes":notes,"files":files};
+		}
+		else if(action == "add_note" || action == "add_files")
+		{
+			commentText = ifnull(req.get("comment"),"").toString().trim();
+			fileNames = ifnull(req.get("files"),List());
+			replyText = ifnull(req.get("reply_to"),"").toString();
+			errors = List();
+			if(action == "add_note")
+			{
+				if(commentText == "")
+				{
+					if(fileNames.size() == 0)
+					{
+						errors.add("Write a comment or attach a file");
+					}
+				}
+			}
+			if(action == "add_files")
+			{
+				if(fileNames.size() == 0)
+				{
+					errors.add("Choose at least one file");
+				}
+			}
+			if(fileNames.size() > 10)
+			{
+				errors.add("Attach at most 10 files at a time");
+			}
+			replyId = null;
+			if(replyText.isNumber())
+			{
+				replyRec = Task_Note[ID == replyText.toLong()];
+				if(replyRec.count() == 0)
+				{
+					errors.add("The comment you reply to no longer exists");
+				}
+				else if(replyRec.Task != collabTaskRec.ID)
+				{
+					errors.add("The comment you reply to belongs to another task");
+				}
+				else
+				{
+					replyId = replyRec.ID;
+				}
+			}
+			if(errors.size() > 0)
+			{
+				response = {"status":"error","code":"INVALID","message":errors.toString("; ")};
+			}
+			else
+			{
+				noteId = null;
+				if(action == "add_note")
+				{
+					authorName = zoho.loginuser;
+					authorRec = Users[Email == zoho.loginuserid];
+					if(authorRec.count() > 0)
+					{
+						authorName = ifnull(authorRec.Name,zoho.loginuser);
+					}
+					noteId = insert into Task_Note
+					[
+						Added_User=zoho.loginuser
+						Task=collabTaskRec.ID
+						Reply_To=replyId
+						Comment=commentText
+						Author=authorName
+					];
+				}
+				fileIds = List();
+				for each  fileName in fileNames
+				{
+					fileText = ifnull(fileName,"").toString().trim();
+					if(fileText == "")
+					{
+						fileText = "File";
+					}
+					taskFileId = insert into Task_File
+					[
+						Added_User=zoho.loginuser
+						Task=collabTaskRec.ID
+						Task_Note=noteId
+						File_Name=fileText
+					];
+					fileIds.add(taskFileId.toString());
+				}
+				noteIdText = "";
+				if(noteId != null)
+				{
+					noteIdText = noteId.toString();
+				}
+				response = {"status":"success","id":noteIdText,"File_IDs":fileIds};
+			}
+		}
+		else if(action == "delete_file")
+		{
+			delFileText = ifnull(req.get("file_id"),"").toString();
+			delFileRec = Task_File[ID == 0];
+			if(delFileText.isNumber())
+			{
+				delFileRec = Task_File[ID == delFileText.toLong()];
+			}
+			if(delFileRec.count() == 0)
+			{
+				response = {"status":"error","code":"NOT_FOUND","message":"File not found"};
+			}
+			else if(delFileRec.Task != collabTaskRec.ID)
+			{
+				response = {"status":"error","code":"INVALID","message":"The file belongs to another task"};
+			}
+			else
+			{
+				delFileId = delFileRec.ID;
+				delete from Task_File[ID == delFileId];
+				response = {"status":"success","id":delFileText};
+			}
+		}
+		else
+		{
+			response = {"status":"error","code":"INVALID","message":"Unknown action: " + action};
+		}
+	}
+	catch (e)
+	{
+		response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+	}
+	return response;
+}

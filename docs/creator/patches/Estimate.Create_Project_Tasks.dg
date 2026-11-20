@@ -1,0 +1,191 @@
+void Estimate.Create_Project_Tasks(int proj_id)
+{
+	try 
+	{
+		if(Task[Project_Name == proj_id].count() == 0 && Milestone[Project == proj_id].count() == 0)
+		{
+			ms_status = null;
+			st = Status[Modules.contains("Milestone") && Index_field == 44];
+			if(st.count() > 0)
+			{
+				ms_status = st.ID;
+			}
+			task_status = null;
+			st = Status[Modules.contains("Task") && Index_field == 1];
+			if(st.count() > 0)
+			{
+				task_status = st.ID;
+			}
+			proj = Project[ID == proj_id];
+			pm_id = proj.Project_Manager;
+			ms_map = Map();
+			for each  m in Administration_Milestone_project_Template[Type_field == "Milestone" && Defalut == true] sort by Index_field
+			{
+				ms_owner = m.Default_Owners;
+				if(ms_owner == null)
+				{
+					ms_owner = pm_id;
+				}
+				new_ms = insert into Milestone
+				[
+					Added_User=zoho.loginuser
+					Milestone_No=thisapp.Creator.AutoGenerateNo("Milestone")
+					Milestone_Name=m.Task_Name
+					Project=proj_id.toLong()
+					Parent_Project=proj_id.toLong()
+					Status=ms_status
+					Owner=ms_owner
+				];
+				ms_map.put(m.ID.toString(),new_ms);
+			}
+			packages = Map();
+			for each  cl in Costing_Lineitem[Project == proj_id]
+			{
+				if(cl.Work_Package != null && cl.Work_Package.toString().trim() != "")
+				{
+					wp_name = cl.Work_Package.toString().trim();
+					wp_lines = List();
+					if(packages.containKey(wp_name))
+					{
+						wp_lines = packages.get(wp_name);
+					}
+					wp_lines.add(cl.ID);
+					packages.put(wp_name,wp_lines);
+				}
+			}
+			tmpl_list = Administration_Milestone_project_Template[Type_field == "Task" && Defalut == true] sort by Index_field;
+			tmpl_ids = List();
+			for each  tp in tmpl_list
+			{
+				tmpl_ids.add(tp.ID.toString());
+			}
+			wp_branch = List();
+			for each  branch_round in {1,2,3,4,5,6}
+			{
+				for each  tb in tmpl_list
+				{
+					tb_id = tb.ID.toString();
+					if(!wp_branch.contains(tb_id))
+					{
+						tb_parent = "";
+						if(tb.Parent_Task != null)
+						{
+							tb_parent = tb.Parent_Task.toString();
+						}
+						if(tb.Work_Package == true)
+						{
+							wp_branch.add(tb_id);
+						}
+						else if(tb_parent != "" && wp_branch.contains(tb_parent))
+						{
+							wp_branch.add(tb_id);
+						}
+					}
+				}
+			}
+			common_map = Map();
+			pass_keys = List();
+			pass_keys.add("");
+			for each  pkg_key in packages.keys()
+			{
+				pass_keys.add(pkg_key);
+			}
+			for each  pass_name in pass_keys
+			{
+				id_map = Map();
+				pass_lines = List();
+				if(pass_name != "")
+				{
+					pass_lines = packages.get(pass_name);
+				}
+				for each  round in {1,2,3,4,5,6}
+				{
+					for each  tp in tmpl_list
+					{
+						tid = tp.ID.toString();
+						in_branch = wp_branch.contains(tid);
+						belongs = in_branch;
+						if(pass_name == "")
+						{
+							belongs = !in_branch;
+						}
+						if(belongs && !id_map.containKey(tid))
+						{
+							parent_tid = "";
+							if(tp.Parent_Task != null)
+							{
+								parent_tid = tp.Parent_Task.toString();
+							}
+							is_root = parent_tid == "" || !tmpl_ids.contains(parent_tid);
+							parent_ready = false;
+							new_parent = null;
+							if(is_root)
+							{
+								parent_ready = true;
+							}
+							else if(id_map.containKey(parent_tid))
+							{
+								parent_ready = true;
+								new_parent = id_map.get(parent_tid);
+							}
+							else if(common_map.containKey(parent_tid))
+							{
+								parent_ready = true;
+								new_parent = common_map.get(parent_tid);
+							}
+							if(parent_ready)
+							{
+								task_type = "Task";
+								if(tp.Work_Package == true)
+								{
+									task_type = "Work Package";
+								}
+								task_owners = List();
+								if(tp.Default_Owners != null)
+								{
+									task_owners.add(tp.Default_Owners);
+								}
+								else if(pm_id != null)
+								{
+									task_owners.add(pm_id);
+								}
+								task_ms = null;
+								if(tp.Milestone_tasklist != null)
+								{
+									if(ms_map.containKey(tp.Milestone_tasklist.toString()))
+									{
+										task_ms = ms_map.get(tp.Milestone_tasklist.toString());
+									}
+								}
+								new_id = insert into Task
+								[
+									Added_User=zoho.loginuser
+									Task_No=thisapp.Creator.AutoGenerateNo("Task")
+									Task_Name=tp.Task_Name
+									Task_Description=tp.Task_Description
+									Project_Name=proj_id
+									Type_field=task_type
+									Task_Status=task_status
+									Parent_Task=new_parent
+									Work_Package=pass_name
+									Work_Packages=pass_lines
+									Owners=task_owners
+									Milestone=task_ms
+								];
+								id_map.put(tid,new_id);
+								if(pass_name == "")
+								{
+									common_map.put(tid,new_id);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	catch (e)
+	{
+		thisapp.Creator.log_addition(zoho.loginuser,"Create_Project_Tasks","Error in Create Task Milestone On Project Creation",proj_id.toString(),e.toString(),"");
+	}
+}

@@ -22,7 +22,17 @@ export function foldOther(data: Datum[], max = SLOTS): Datum[] {
 }
 
 /** Donut (pie) with a centre total and a value legend. */
-export const DonutChart = memo(function DonutChart({ data, format = String, centerLabel = 'Total', colors }: { data: Datum[]; format?: (n: number) => string; centerLabel?: string; colors?: string[] }) {
+export const DonutChart = memo(function DonutChart({
+  data,
+  format = String,
+  centerLabel = 'Total',
+  colors,
+}: {
+  data: Datum[]
+  format?: (n: number) => string
+  centerLabel?: string
+  colors?: string[]
+}) {
   const rows = foldOther(data.filter((d) => d.value > 0))
   const total = rows.reduce((s, d) => s + d.value, 0)
   const R = 52
@@ -224,7 +234,7 @@ function Trend({ labels, series: ser, area, format = String, highlight }: { labe
         ))}
         {highlight !== undefined && highlight >= 0 && highlight < labels.length && <line x1={x(highlight)} x2={x(highlight)} y1={P.t} y2={H - P.b} className="gc-trend__today" />}
         {labels.map((l, i) => (
-          <text key={l} x={x(i)} y={H - 10} textAnchor="middle" className="gc-trend__axis">
+          <text key={l} x={x(i)} y={H - 10} textAnchor={i === 0 ? 'start' : i === labels.length - 1 ? 'end' : 'middle'} className="gc-trend__axis">
             {l}
           </text>
         ))}
@@ -249,65 +259,6 @@ function Trend({ labels, series: ser, area, format = String, highlight }: { labe
 }
 export const LineChart = memo((p: Omit<Parameters<typeof Trend>[0], 'area'>) => <Trend {...p} />)
 export const AreaChart = memo((p: Omit<Parameters<typeof Trend>[0], 'area'>) => <Trend {...p} area />)
-
-export interface GanttRow {
-  id: string
-  label: string
-  sub?: string
-  start: string
-  end: string
-  /** 0–100, drawn inside the bar */
-  progress: number
-  color: string
-  onClick?: () => void
-}
-/** Gantt: one bar per row from start to end (ISO dates) on a shared month scale, with a "today" line. */
-export function GanttChart({ rows, today }: { rows: GanttRow[]; today: string }) {
-  const dated = rows.filter((r) => r.start && r.end && r.end >= r.start)
-  if (dated.length === 0) return <div className="gc-empty">No project with a start and completion date</div>
-  const t = (iso: string) => Date.parse(`${iso}T00:00:00Z`)
-  const lo = new Date(Math.min(...dated.map((r) => t(r.start)), t(today)))
-  const hi = new Date(Math.max(...dated.map((r) => t(r.end)), t(today)))
-  const from = Date.UTC(lo.getUTCFullYear(), lo.getUTCMonth(), 1)
-  const to = Date.UTC(hi.getUTCFullYear(), hi.getUTCMonth() + 1, 1)
-  const pct = (ms: number) => ((ms - from) / (to - from)) * 100
-  const months: { label: string; left: number }[] = []
-  for (let d = new Date(from); d.getTime() < to; d.setUTCMonth(d.getUTCMonth() + 1)) months.push({ label: d.toLocaleString('en', { month: 'short', year: '2-digit', timeZone: 'UTC' }), left: pct(d.getTime()) })
-  const missing = rows.length - dated.length
-  return (
-    <div className="gc-gantt">
-      <div className="gc-gantt__head">
-        <span />
-        <div className="gc-gantt__scale">
-          {months.map((m) => (
-            <span key={m.label} style={{ left: `${m.left}%` }}>
-              {m.label}
-            </span>
-          ))}
-        </div>
-      </div>
-      {dated.map((r) => (
-        <div key={r.id} className={`gc-gantt__row ${r.onClick ? 'is-click' : ''}`} onClick={r.onClick} role={r.onClick ? 'button' : undefined} tabIndex={r.onClick ? 0 : undefined} onKeyDown={(e) => e.key === 'Enter' && r.onClick?.()} aria-label={r.onClick ? `Open ${r.label}` : undefined}>
-          <span className="gc-gantt__label">
-            <strong className="gc-ellipsis">{r.label}</strong>
-            {r.sub && <span className="gc-small gc-soft gc-ellipsis">{r.sub}</span>}
-          </span>
-          <div className="gc-gantt__track">
-            {months.map((m) => (
-              <i key={m.label} style={{ left: `${m.left}%` }} />
-            ))}
-            <span className="gc-gantt__bar" style={{ left: `${pct(t(r.start))}%`, width: `${Math.max(1, pct(t(r.end) + 86_400_000) - pct(t(r.start)))}%`, ['--c' as string]: r.color }} title={`${r.label}: ${r.start} → ${r.end} · ${Math.round(r.progress)}% done`}>
-              <span className="gc-gantt__fill" style={{ width: `${Math.min(100, Math.max(0, r.progress))}%` }} />
-              <span className="gc-gantt__pct">{Math.round(r.progress)}%</span>
-            </span>
-            <b className="gc-gantt__today" style={{ left: `${pct(t(today))}%` }} title={`Today ${today}`} />
-          </div>
-        </div>
-      ))}
-      {missing > 0 && <p className="gc-small gc-soft">{missing} project(s) without a Start Date or Project Completion Date are not shown.</p>}
-    </div>
-  )
-}
 
 /** Pipe (pipeline) chart: stages in order as joined pipe sections, each with its count. */
 export function PipeChart({ stages, unit = 'projects' }: { stages: Datum[]; unit?: string }) {

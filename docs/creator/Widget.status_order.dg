@@ -1,11 +1,74 @@
-// Widget.status_order() — the static status order (one place). Not a Custom API: called by project_details and project_update.
-// Status records are matched by name; their IDs still come from the Status form.
 map Widget.status_order()
 {
 	order = Map();
-	order.put("project",{"Registered","Kick-Off Done","Planning / Shop Drawings","Procurement in Progress","Partially Delivered","Ready for Installation","Installation in Progress","Configuration & T&C","UAT","Snagging","Handover","Completed","DLP / Service","Closed"});
-	order.put("anytime",{"On Hold","Cancelled"});
-	order.put("task",{"Not Started","On Track","Behind","At Risk","Complete","Deprioritized"});
-	order.put("boq",{"Order Pending ⚠️","Ordered  ⏳","Not Ordered 🚩","In Production ⚙️","Ready to Ship 🏳️","In Transit 🚛 🛫 🚢 🚐","In Customs 🚨","2.0 Dubai Warehouse 📍","2.0 Riyadh Office 📍","Delivered to Client  ✅","2.0 Riyadh Warehouse 📍","Partially Delivered 🚧"});
+	projectStages = List();
+	for each  projStatusRec in Status[Modules.contains("Project") && Order > 0] sort by Order
+	{
+		projModules = projStatusRec.Modules;
+		if(projModules.contains("Project"))
+		{
+			projStatusName = ifnull(projStatusRec.Status_Name,"").trim();
+			if(projStatusName != "" && !projectStages.contains(projStatusName))
+			{
+				projectStages.add(projStatusName);
+			}
+		}
+	}
+	anytime = List();
+	for each  anyStatusRec in Status[Modules.contains("Project")] sort by Index_field
+	{
+		anyModules = anyStatusRec.Modules;
+		anyStatusName = ifnull(anyStatusRec.Status_Name,"").trim();
+		anyOrder = ifnull(anyStatusRec.Order,0);
+		if(!anyModules.contains("Project"))
+		{
+			anyOrder = 1;
+		}
+		if(anyOrder <= 0)
+		{
+			if(anyStatusName != "" && !anytime.contains(anyStatusName))
+			{
+				anytime.add(anyStatusName);
+			}
+		}
+	}
+	taskOrder = List();
+	for each  taskStatusRec in Status[Modules.contains("Task") && Order > 0] sort by Order
+	{
+		taskStatusName = ifnull(taskStatusRec.Status_Name,"").trim();
+		if(taskStatusName != "" && !taskOrder.contains(taskStatusName))
+		{
+			taskOrder.add(taskStatusName);
+		}
+	}
+	for each  taskRestRec in Status[Modules.contains("Task")] sort by Index_field
+	{
+		taskRestName = ifnull(taskRestRec.Status_Name,"").trim();
+		if(taskRestName != "" && !taskOrder.contains(taskRestName))
+		{
+			taskOrder.add(taskRestName);
+		}
+	}
+	boqOrder = List();
+	for each  boqStatusRec in Status[Modules.contains("BOQ") && Order > 0] sort by Order
+	{
+		boqStatusName = ifnull(boqStatusRec.Status_Name,"");
+		if(boqStatusName.trim() != "" && !boqOrder.contains(boqStatusName))
+		{
+			boqOrder.add(boqStatusName);
+		}
+	}
+	for each  boqRestRec in Status[Modules.contains("BOQ")] sort by Index_field
+	{
+		boqRestName = ifnull(boqRestRec.Status_Name,"");
+		if(boqRestName.trim() != "" && !boqOrder.contains(boqRestName))
+		{
+			boqOrder.add(boqRestName);
+		}
+	}
+	order.put("project",projectStages);
+	order.put("anytime",anytime);
+	order.put("task",taskOrder);
+	order.put("boq",boqOrder);
 	return order;
 }

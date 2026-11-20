@@ -25,6 +25,12 @@ Home already contains a widget element. Make it this widget.
 2. Add a parameter **`procurement_project_id`** (string). This name is what tells the widget to show the Procurement Schedule.
 3. Add the same widget at full width.
 
+## 3c. Procurement module: goods receipt and delivery notes (v1.2, DS 11)
+1. Create the functions `Widget.purchase_receive` and `Widget.purchase_delivery` from [creator/](creator/) and paste the updated `project_console`, `project_options` and `project_create_po` (see [CUSTOM_FUNCTIONS.md](CUSTOM_FUNCTIONS.md)).
+2. Create the Custom APIs **Widget_Purchase_Receive** and **Widget_Purchase_Delivery** (POST, OAuth2, all users, parameter `quo_data`).
+3. Goods receipts and delivery notes made in the widget create the same records as the existing Purchase Receive / Delivery Challan buttons, and run the same steps as their workflows, because workflows do not run when Deluge inserts a record.
+4. Payments stay in Zoho Books (no payment fields in Creator); the Payments section shows terms days, due date and the Books sync state.
+
 ## 4. "Open Project" button on the Projects report
 In **All_Projects**:
 1. Go to Edit report → Record actions → Custom action, named **Open Project Widget**.

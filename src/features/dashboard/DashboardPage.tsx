@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react'
 import { useDashboard } from '@/features/projects/api'
-import { AreaChart, BarChart, DonutChart, GanttChart, GaugeChart, LineChart, PipeChart } from '@/features/console/charts'
+import { AreaChart, BarChart, DonutChart, GaugeChart, LineChart, PipeChart } from '@/features/console/charts'
 import type { Nav } from '@/features/console/ConsoleApp'
 import { Chip, ErrorPanel, Panel, SectionSkeleton } from '@/features/console/ui'
 import { TopBar } from '@/features/console/TopBar'
 import { countBy, formatDate, statusKey } from '@/lib/utils'
 import type { DashboardProject } from '@/types/domain'
 import { localToday, ratio } from '@/features/project/model'
-import { ReferenceSearch } from './ReferenceSearch'
+import { ProjectTimeline } from './ProjectTimeline'
+import { ProjectPicker } from './ProjectPicker'
+import { DealSearch } from './DealSearch'
 
 /**
  * Status groups (project lifecycle): Completed, DLP / Service and Closed = closed; On Hold; Cancelled;
@@ -20,7 +22,16 @@ const group = (status: string) => {
 /** Health: same rule as the Project Widget — a delayed milestone or an open Critical risk = At Risk. Closed projects are not rated. */
 const healthOf = (p: DashboardProject) => (group(p.status) === 'Closed' || group(p.status) === 'Cancelled' ? 'Closed' : p.milestonesDelayed > 0 || p.risksCritical > 0 ? 'At Risk' : 'On Track')
 // Dashboard palette: varied hues, no single dominant colour (tokens in console.css → .gc-dash)
-const C = { blue: 'var(--gc-d-blue)', pink: 'var(--gc-d-pink)', purple: 'var(--gc-d-purple)', orange: 'var(--gc-d-orange)', yellow: 'var(--gc-d-yellow)', red: 'var(--gc-d-red)', teal: 'var(--gc-d-teal)', grey: 'var(--gc-other)' }
+const C = {
+  blue: 'var(--gc-d-blue)',
+  pink: 'var(--gc-d-pink)',
+  purple: 'var(--gc-d-purple)',
+  orange: 'var(--gc-d-orange)',
+  yellow: 'var(--gc-d-yellow)',
+  red: 'var(--gc-d-red)',
+  teal: 'var(--gc-d-teal)',
+  grey: 'var(--gc-other)',
+}
 const HEALTH_COLORS: Record<string, string> = { 'On Track': C.blue, 'At Risk': C.orange, Closed: C.grey }
 const compact = (n: number) => `AED ${new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 2 }).format(n)}`
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -35,9 +46,9 @@ const monthWindow = (today: string) => {
 const monthLabel = (k: string) => `${MON[Number(k.slice(5)) - 1]} ${k.slice(2, 4)}`
 
 /**
- * Home — the Project Search Dashboard. Per the architecture (Dashboard: completion, procurement, issues, days and cost vs
- * quote), each metric has its own visual: completion = half-pie gauges, lifecycle = pipe chart, health / type = pie charts,
- * days = Gantt, task trend = line + area charts, cost vs quote and issues = bar charts, analysis = pivot table.
+ * Home — the Project Search Dashboard (PPT 1a–1e): search and Go To in the same dropdown style; a fixed-height view with
+ * no page scroll — Overview (completion, health, lifecycle, milestones, project team & core data, risks), then
+ * Timelines (Gantt), Trends (line, area, cost vs quote, issues), Pivot and Projects as views of the same space.
  */
 export function DashboardPage({ nav }: { nav: Nav }) {
   const onOpen = nav.project
@@ -49,9 +60,10 @@ export function DashboardPage({ nav }: { nav: Nav }) {
     const ps = q.data.projects
     const sum = (rows: DashboardProject[], f: (p: DashboardProject) => number) => rows.reduce((t, p) => t + f(p), 0)
     const live = ps.filter((p) => group(p.status) === 'Active' || group(p.status) === 'On Hold')
-    // Lifecycle pipeline: the static stage order, then On Hold / Cancelled; statuses outside it are listed last
+    // Lifecycle pipeline: the stages (Status records with an Order), then the any-time statuses (no Order); others last
     const order = q.data.stageOrder
-    const known = new Set([...order, 'On Hold', 'Cancelled'].map(statusKey))
+    const anytime = q.data.anytimeOrder
+    const known = new Set([...order, ...anytime].map(statusKey))
     const stageCount = (label: string) => ps.filter((p) => statusKey(p.status) === statusKey(label)).length
     const others = countBy(
       ps.filter((p) => !known.has(statusKey(p.status))),
@@ -65,6 +77,7 @@ export function DashboardPage({ nav }: { nav: Nav }) {
     const cumulative = (vals: number[], start: number) => vals.reduce<number[]>((acc, v) => [...acc, (acc.at(-1) ?? start) + v], [])
     return {
       ps,
+      live,
       today,
       tasksTotal: sum(ps, (p) => p.tasksTotal),
       tasksDone: sum(ps, (p) => p.tasksDone),
@@ -72,7 +85,7 @@ export function DashboardPage({ nav }: { nav: Nav }) {
       linesDelivered: sum(ps, (p) => p.linesDelivered),
       health: countBy(ps, healthOf),
       byType: countBy(ps, (p) => p.type),
-      pipeline: [...order.map((s) => ({ label: s, value: stageCount(s) })), { label: 'On Hold', value: stageCount('On Hold') }, { label: 'Cancelled', value: stageCount('Cancelled') }, ...others],
+      pipeline: [...order, ...anytime].map((s) => ({ label: s, value: stageCount(s) })).concat(others),
       gantt: [...live].sort((a, b) => (a.startDate || '9').localeCompare(b.startDate || '9')),
       months: months.map(monthLabel),
       thisMonth: 6,
@@ -85,8 +98,17 @@ export function DashboardPage({ nav }: { nav: Nav }) {
     }
   }, [q.data])
 
+  const [view, setView] = useState<'overview' | 'timeline' | 'trends' | 'pivot' | 'projects'>('overview')
+  const views: [typeof view, string][] = [
+    ['overview', 'Overview'],
+    ['timeline', 'Timelines'],
+    ['trends', 'Trends'],
+    ['pivot', 'Pivot'],
+    ['projects', 'Projects'],
+  ]
+
   return (
-    <main className="gc-main gc-dash">
+    <main className="gc-main gc-dash gc-home">
       <header className="gc-home-head">
         <div>
           <span className="gc-eyebrow">2point0 Concepts · Project Search Dashboard</span>
@@ -95,19 +117,22 @@ export function DashboardPage({ nav }: { nav: Nav }) {
         <TopBar name={q.data?.user} />
       </header>
       <div className="gc-finders" role="search">
-        <ReferenceSearch estimates={q.data?.estimates} loading={q.isLoading} onPick={(e) => nav.costAnalysis(e.id)} />
-        <label className="gc-finder" title="Approved projects only — opens the Project Widget">
-          <span className="gc-finder__label">Go To</span>
-          <select aria-label="Approved project" value="" disabled={!m} onChange={(e) => e.target.value && onOpen(e.target.value)}>
-            <option value="">Approved project…</option>
-            {m?.ps.map((p) => (
-              <option key={p.id} value={p.id}>
-                {[p.reference, p.name].filter(Boolean).join(' – ')}
-                {p.client ? ` · ${p.client}` : ''}
-              </option>
+        <div className="gc-finder gc-finder--search">
+          <span className="gc-finder__label">New cost analysis</span>
+          <DealSearch onCreated={nav.newCostAnalysis} />
+        </div>
+        <div className="gc-finder gc-finder--search" title="Draft and approved projects — opens the Project Widget">
+          <ProjectPicker projects={m?.ps} onPick={onOpen} />
+        </div>
+        {m && m.ps.length > 0 && (
+          <div className="gc-pg-tabs gc-home-views" role="tablist" aria-label="Dashboard view">
+            {views.map(([id, label]) => (
+              <button key={id} type="button" role="tab" aria-selected={view === id} className={view === id ? 'is-on' : ''} onClick={() => setView(id)}>
+                {label}
+              </button>
             ))}
-          </select>
-        </label>
+          </div>
+        )}
       </div>
 
       {q.error ? (
@@ -117,128 +142,207 @@ export function DashboardPage({ nav }: { nav: Nav }) {
       ) : m.ps.length === 0 ? (
         <NoProjects onRetry={() => q.refetch()} />
       ) : (
-        <div className="gc-stack">
-          <div className="gc-grid-3">
-            <Panel title="Completion">
-              <div className="gc-gauges gc-gauges--2">
-                <GaugeChart label="Tasks completed" value={m.tasksDone} total={m.tasksTotal} color={C.purple} />
-                <GaugeChart label="Assets delivered" value={m.linesDelivered} total={m.linesTotal} color={C.orange} sub={`${m.linesDelivered} of ${m.linesTotal} asset lines`} />
+        <div className="gc-home-body">
+          {view === 'overview' && (
+            <div className="gc-home-grid">
+              <Panel title="Completion" className="gc-home-cell">
+                <div className="gc-gauges gc-gauges--2">
+                  <GaugeChart label="Tasks completed" value={m.tasksDone} total={m.tasksTotal} color={C.purple} />
+                  <GaugeChart label="Assets delivered" value={m.linesDelivered} total={m.linesTotal} color={C.orange} sub={`${m.linesDelivered} of ${m.linesTotal} asset lines`} />
+                </div>
+              </Panel>
+              <Panel title="Project health" className="gc-home-cell">
+                <DonutChart data={m.health} centerLabel="Projects" colors={m.health.map((h) => HEALTH_COLORS[h.label] ?? C.grey)} />
+              </Panel>
+              <Panel title="Lifecycle pipeline" className="gc-home-cell">
+                <PipeChart stages={m.pipeline.filter((s) => s.value > 0)} />
+              </Panel>
+              <Panel title="Milestones" className="gc-home-cell" actions={<span className="gc-small gc-soft">done · delayed · open</span>}>
+                <ul className="gc-home-list">
+                  {m.live.map((p) => (
+                    <li key={p.id}>
+                      <button type="button" className="gc-link" onClick={() => onOpen(p.id)}>
+                        {p.reference || p.name}
+                      </button>
+                      <span
+                        className="gc-home-bar"
+                        role="img"
+                        aria-label={`${p.milestonesDone} done, ${p.milestonesDelayed} delayed, ${Math.max(0, p.milestonesTotal - p.milestonesDone - p.milestonesDelayed)} open`}
+                      >
+                        <i style={{ flexGrow: p.milestonesDone, background: C.teal }} />
+                        <i style={{ flexGrow: p.milestonesDelayed, background: C.orange }} />
+                        <i style={{ flexGrow: Math.max(0, p.milestonesTotal - p.milestonesDone - p.milestonesDelayed), background: 'var(--gc-track)' }} />
+                      </span>
+                      <span className="gc-num gc-small">
+                        {p.milestonesDone}/{p.milestonesTotal}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </Panel>
+              <Panel title="Project team & core data" className="gc-home-cell">
+                <table className="gc-table gc-table--compact gc-home-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Project</th>
+                      <th scope="col">Manager</th>
+                      <th scope="col">Stage</th>
+                      <th scope="col">Due</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {m.live.map((p) => (
+                      <tr key={p.id}>
+                        <td>
+                          <button type="button" className="gc-link" onClick={() => onOpen(p.id)} title={[p.name, p.client].filter(Boolean).join(' · ')}>
+                            {p.reference || p.name}
+                          </button>
+                        </td>
+                        <td>{p.projectManager || '—'}</td>
+                        <td>{p.status || '—'}</td>
+                        <td>{formatDate(p.completionDate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="gc-small gc-soft">
+                  {q.data!.usersAssigned} of {q.data!.usersActive} active users on project teams · {q.data!.teamAssignments} assignments
+                </p>
+              </Panel>
+              <Panel title="Risks" className="gc-home-cell" actions={<span className="gc-small gc-soft">open · critical</span>}>
+                <ul className="gc-home-list">
+                  {[...m.live]
+                    .sort((a, b) => b.risksCritical - a.risksCritical || b.risksOpen - a.risksOpen)
+                    .map((p) => (
+                      <li key={p.id}>
+                        <button type="button" className="gc-link" onClick={() => onOpen(p.id)}>
+                          {p.reference || p.name}
+                        </button>
+                        <span className="gc-small gc-soft">{p.risksOpen} open</span>
+                        {p.risksCritical > 0 ? <Chip tone="critical">{p.risksCritical} critical</Chip> : <span className="gc-small gc-muted">—</span>}
+                      </li>
+                    ))}
+                </ul>
+              </Panel>
+            </div>
+          )}
+          {view === 'timeline' && (
+            <Panel
+              title="Project timelines · active and on hold"
+              className="gc-home-fill"
+              actions={<span className="gc-small gc-soft">Start Date → Project Completion Date · hover a bar or marker for details · click a project to open it</span>}
+            >
+              <ProjectTimeline
+                today={m.today}
+                rows={m.gantt.map((p) => ({
+                  id: p.id,
+                  label: p.reference || p.name,
+                  sub: `${p.projectManager || 'No PM'} · ${p.status || '—'}`,
+                  start: p.startDate,
+                  end: p.completionDate,
+                  progress: (ratio(p.tasksDone, p.tasksTotal) ?? 0) * 100,
+                  atRisk: healthOf(p) === 'At Risk',
+                  details: [
+                    `${p.name}${p.client ? ` · ${p.client}` : ''}`,
+                    `Project Manager: ${p.projectManager || '—'} · Status: ${p.status || '—'}`,
+                    `Tasks ${p.tasksDone}/${p.tasksTotal} done · ${p.tasksOverdue} overdue`,
+                    `Milestones ${p.milestonesDone}/${p.milestonesTotal} done · ${p.milestonesDelayed} delayed`,
+                    `Open risks ${p.risksOpen}${p.risksCritical ? ` (${p.risksCritical} critical)` : ''} · Health: ${healthOf(p)}`,
+                  ],
+                  events: [...p.events, ...p.statusHistory.filter((h) => h.at).map((h) => ({ type: 'status' as const, name: h.status, date: h.at, by: h.user, status: h.reason }))],
+                  onOpen: () => onOpen(p.id),
+                }))}
+              />
+            </Panel>
+          )}
+          {view === 'trends' && (
+            <div className="gc-home-grid">
+              <Panel title="Tasks due vs completed per month" className="gc-home-cell">
+                <LineChart
+                  labels={m.months}
+                  highlight={m.thisMonth}
+                  series={[
+                    { key: 'due', label: 'Due', values: m.due, color: C.blue },
+                    { key: 'done', label: 'Completed', values: m.done, color: C.pink },
+                  ]}
+                />
+              </Panel>
+              <Panel title="Cumulative tasks: planned vs completed" className="gc-home-cell">
+                <AreaChart
+                  labels={m.months}
+                  highlight={m.thisMonth}
+                  series={[
+                    { key: 'planned', label: 'Planned (due)', values: m.dueCum, color: C.purple },
+                    { key: 'completed', label: 'Completed', values: m.doneCum, color: C.yellow },
+                  ]}
+                />
+              </Panel>
+              <Panel title="Type of project" className="gc-home-cell">
+                <DonutChart data={m.byType} centerLabel="Projects" colors={[C.purple, C.yellow, C.teal, C.pink, C.blue, C.orange]} />
+              </Panel>
+              <Panel title="Cost vs quote · top 8 by Project Value (PO)" className="gc-home-cell">
+                <BarChart
+                  rows={m.cost.map((p) => ({ label: p.reference || p.name, values: { quote: p.quote, cost: p.budget, po: p.value } }))}
+                  series={[
+                    { key: 'quote', label: 'Quote (estimate sub total)' },
+                    { key: 'cost', label: 'Budget cost' },
+                    { key: 'po', label: 'Project Value (PO)' },
+                  ]}
+                  format={compact}
+                />
+              </Panel>
+              <Panel title="Issues by project · active and on hold" className="gc-home-cell">
+                <BarChart
+                  rows={m.issues.map((p) => ({ label: p.reference || p.name, values: { overdue: p.tasksOverdue, risks: p.risksOpen, critical: p.risksCritical } }))}
+                  series={[
+                    { key: 'overdue', label: 'Overdue tasks' },
+                    { key: 'risks', label: 'Open risks' },
+                    { key: 'critical', label: 'Critical risks' },
+                  ]}
+                />
+              </Panel>
+              <Panel title="Employees" className="gc-home-cell">
+                <DonutChart
+                  data={[
+                    { label: 'On project teams', value: q.data!.usersAssigned },
+                    { label: 'Active, not on a team', value: Math.max(0, q.data!.usersActive - q.data!.usersAssigned) },
+                    { label: 'Inactive', value: Math.max(0, q.data!.usersTotal - q.data!.usersActive) },
+                  ]}
+                  centerLabel="Employees"
+                  colors={[C.blue, C.pink, C.grey]}
+                />
+              </Panel>
+            </div>
+          )}
+          {view === 'pivot' && (
+            <div className="gc-home-fill gc-home-scroll">
+              <Pivot ps={m.ps} />
+            </div>
+          )}
+          {view === 'projects' && (
+            <Panel title={`Projects (${m.ps.length})`} className="gc-home-fill" actions={<span className="gc-small gc-soft">Click a card to open the Project Widget</span>}>
+              <div className="gc-cards">
+                {m.ps.map((p) => {
+                  const h = healthOf(p)
+                  return (
+                    <button key={p.id} type="button" className="gc-card" onClick={() => onOpen(p.id)} aria-label={`Open ${p.reference} ${p.name}`}>
+                      <span className="gc-card__top">
+                        <span className="gc-card__ref">{p.reference || '—'}</span>
+                        <Chip tone={h === 'At Risk' ? 'warning' : h === 'On Track' ? 'info' : undefined}>{h}</Chip>
+                      </span>
+                      <strong className="gc-card__name">{p.name || '—'}</strong>
+                      <span className="gc-small gc-soft">
+                        {p.client || '—'} · {compact(p.value)}
+                      </span>
+                      <span className="gc-small gc-muted">
+                        {p.status || '—'} · due {formatDate(p.completionDate)}
+                      </span>
+                    </button>
+                  )
+                })}
               </div>
             </Panel>
-            <Panel title="Project health">
-              <DonutChart data={m.health} centerLabel="Projects" colors={m.health.map((h) => HEALTH_COLORS[h.label] ?? C.grey)} />
-              <p className="gc-small gc-soft">At Risk = a delayed milestone or an open Critical risk.</p>
-            </Panel>
-            <Panel title="Type of project">
-              <DonutChart data={m.byType} centerLabel="Projects" colors={[C.purple, C.yellow, C.teal, C.pink, C.blue, C.orange]} />
-            </Panel>
-          </div>
-          <Panel title="Project lifecycle pipeline">
-            <PipeChart stages={m.pipeline} />
-          </Panel>
-          <Panel title="Project timelines (days) · active and on hold" actions={<span className="gc-small gc-soft">Start Date → Project Completion Date · fill = tasks completed · click to open</span>}>
-            <GanttChart
-              today={m.today}
-              rows={m.gantt.map((p) => ({
-                id: p.id,
-                label: p.reference || p.name,
-                sub: `${p.projectManager || 'No PM'} · ${p.status || '—'}`,
-                start: p.startDate,
-                end: p.completionDate,
-                progress: (ratio(p.tasksDone, p.tasksTotal) ?? 0) * 100,
-                color: healthOf(p) === 'At Risk' ? C.orange : C.purple,
-                onClick: () => onOpen(p.id),
-              }))}
-            />
-          </Panel>
-          <div className="gc-grid-2">
-            <Panel title="Tasks due vs completed per month">
-              <LineChart
-                labels={m.months}
-                highlight={m.thisMonth}
-                series={[
-                  { key: 'due', label: 'Due', values: m.due, color: C.blue },
-                  { key: 'done', label: 'Completed', values: m.done, color: C.pink },
-                ]}
-              />
-            </Panel>
-            <Panel title="Cumulative tasks: planned vs completed">
-              <AreaChart
-                labels={m.months}
-                highlight={m.thisMonth}
-                series={[
-                  { key: 'planned', label: 'Planned (due)', values: m.dueCum, color: C.purple },
-                  { key: 'completed', label: 'Completed', values: m.doneCum, color: C.yellow },
-                ]}
-              />
-            </Panel>
-            <Panel title="Cost vs quote · top 8 by Project Value (PO)">
-              <BarChart
-                rows={m.cost.map((p) => ({ label: p.reference || p.name, values: { quote: p.quote, cost: p.budget, po: p.value } }))}
-                series={[
-                  { key: 'quote', label: 'Quote (estimate sub total)' },
-                  { key: 'cost', label: 'Budget cost' },
-                  { key: 'po', label: 'Project Value (PO)' },
-                ]}
-                format={compact}
-              />
-            </Panel>
-            <Panel title="Issues by project · active and on hold">
-              <BarChart
-                rows={m.issues.map((p) => ({ label: p.reference || p.name, values: { overdue: p.tasksOverdue, risks: p.risksOpen, critical: p.risksCritical } }))}
-                series={[
-                  { key: 'overdue', label: 'Overdue tasks' },
-                  { key: 'risks', label: 'Open risks' },
-                  { key: 'critical', label: 'Critical risks' },
-                ]}
-              />
-            </Panel>
-            <Panel title="Milestones by project · active and on hold">
-              <BarChart
-                rows={m.issues.map((p) => ({ label: p.reference || p.name, values: { done: p.milestonesDone, delayed: p.milestonesDelayed, open: Math.max(0, p.milestonesTotal - p.milestonesDone - p.milestonesDelayed) } }))}
-                series={[
-                  { key: 'done', label: 'Completed' },
-                  { key: 'delayed', label: 'Delayed' },
-                  { key: 'open', label: 'Open' },
-                ]}
-              />
-            </Panel>
-            <Panel title="Employees">
-              <DonutChart
-                data={[
-                  { label: 'On project teams', value: q.data!.usersAssigned },
-                  { label: 'Active, not on a team', value: Math.max(0, q.data!.usersActive - q.data!.usersAssigned) },
-                  { label: 'Inactive', value: Math.max(0, q.data!.usersTotal - q.data!.usersActive) },
-                ]}
-                centerLabel="Employees"
-                colors={[C.blue, C.pink, C.grey]}
-              />
-              <p className="gc-small gc-soft">{q.data!.teamAssignments} team assignments</p>
-            </Panel>
-          </div>
-          <Pivot ps={m.ps} />
-          <Panel title={`Projects (${m.ps.length})`} actions={<span className="gc-small gc-soft">Click a card to open the Project Widget</span>}>
-            <div className="gc-cards">
-              {m.ps.map((p) => {
-                const h = healthOf(p)
-                return (
-                  <button key={p.id} type="button" className="gc-card" onClick={() => onOpen(p.id)} aria-label={`Open ${p.reference} ${p.name}`}>
-                    <span className="gc-card__top">
-                      <span className="gc-card__ref">{p.reference || '—'}</span>
-                      <Chip tone={h === 'At Risk' ? 'warning' : h === 'On Track' ? 'info' : undefined}>{h}</Chip>
-                    </span>
-                    <strong className="gc-card__name">{p.name || '—'}</strong>
-                    <span className="gc-small gc-soft">
-                      {p.client || '—'} · {compact(p.value)}
-                    </span>
-                    <span className="gc-small gc-muted">
-                      {p.status || '—'} · due {formatDate(p.completionDate)}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          </Panel>
+          )}
         </div>
       )}
     </main>

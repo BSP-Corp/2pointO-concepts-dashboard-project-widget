@@ -1,0 +1,983 @@
+map Widget.purchase_receive(string quo_data)
+{
+	response = Map();
+	savedPrId = 0;
+	savedPrNo = "";
+	try
+	{
+		req = quo_data.toMap();
+		poText = ifnull(req.get("po_id"),"").toString();
+		lines = ifnull(req.get("lines"),List());
+		errors = List();
+		poRec = Purchase_Order[ID == 0];
+		if(poText.isNumber())
+		{
+			poRec = Purchase_Order[ID == poText.toLong()];
+		}
+		if(poRec.count() == 0)
+		{
+			errors.add("Purchase order not found");
+		}
+		if(lines.size() == 0)
+		{
+			errors.add("Enter a received quantity for at least one line");
+		}
+		receiveDate = zoho.currentdate;
+		if(ifnull(req.get("receive_date"),"").toString() != "")
+		{
+			receiveDate = req.get("receive_date").toString().toDate();
+		}
+		if(receiveDate > zoho.currentdate)
+		{
+			errors.add("Receipt date cannot be in the future");
+		}
+		poCountry = null;
+		if(poRec.count() > 0)
+		{
+			poCountry = poRec.Country;
+		}
+		positions = {"Centre","Left","Right","Top","Other"};
+		totalReceived = 0;
+		seenLines = List();
+		seenSerials = List();
+		receivedBefore = Map();
+		nameOf = Map();
+		for each  line in lines
+		{
+			lineText = ifnull(line.get("line_id"),"").toString();
+			quantityText = ifnull(line.get("quantity"),"0").toString();
+			quantity = 0;
+			if(quantityText.isNumber())
+			{
+				quantity = quantityText.toLong();
+			}
+			checkLineRec = PO_Line_Items[ID == 0];
+			if(lineText.isNumber())
+			{
+				checkLineRec = PO_Line_Items[ID == lineText.toLong()];
+			}
+			if(checkLineRec.count() == 0)
+			{
+				errors.add("A line was not found");
+			}
+			else if(seenLines.contains(lineText))
+			{
+				errors.add(ifnull(checkLineRec.Item_Description,"Line") + " is listed twice");
+			}
+			else if(checkLineRec.Purchase_Order != poRec.ID)
+			{
+				errors.add(ifnull(checkLineRec.Item_Description,"Line") + " is not on this purchase order");
+			}
+			else if(checkLineRec.is_PR == true || checkLineRec.is_DN == true)
+			{
+				errors.add(ifnull(checkLineRec.Item_Description,"Line") + " is a receipt or delivery note line");
+			}
+			else if(checkLineRec.Item_Name == null)
+			{
+				errors.add(ifnull(checkLineRec.Item_Description,"Line") + " has no product (Item Name) on the PO");
+			}
+			else
+			{
+				seenLines.add(lineText);
+				name = ifnull(checkLineRec.Item_Description,"Line");
+				itemName = ifnull(checkLineRec.Item_Name.Item_Name,"");
+				if(itemName != "")
+				{
+					name = itemName;
+				}
+				nameOf.put(lineText,name);
+				ordered = ifnull(checkLineRec.Quantity,0);
+				alreadyReceived = ifnull(checkLineRec.Quantity_Received,0);
+				pending = ordered - alreadyReceived;
+				receivedBefore.put(lineText,alreadyReceived);
+				if(!quantityText.isNumber())
+				{
+					errors.add(name + ": Quantity Received must be a whole number");
+				}
+				else if(quantity <= 0)
+				{
+					errors.add(name + ": Quantity Received must be above 0");
+				}
+				else if(quantity > pending)
+				{
+					errors.add(name + ": Quantity Received must be between 0 and " + pending + " (pending: ordered " + ordered + ", received " + alreadyReceived + ")");
+				}
+				else
+				{
+					totalReceived = totalReceived + quantity;
+					serialList = ifnull(line.get("serials"),List());
+					filled = 0;
+					for each  unit in serialList
+					{
+						monthsText = ifnull(unit.get("warranty_months"),"").toString().trim();
+						if(monthsText != "")
+						{
+							if(!monthsText.isNumber())
+							{
+								errors.add(name + ": vendor warranty must be whole months");
+							}
+							else if(monthsText.toLong() > 240)
+							{
+								errors.add(name + ": vendor warranty cannot be more than 240 months");
+							}
+						}
+						serialText = ifnull(unit.get("serial_no"),"").toString().trim();
+						if(serialText != "")
+						{
+							filled = filled + 1;
+							serialKey = serialText.toUpperCase();
+							if(seenSerials.contains(serialKey))
+							{
+								errors.add("Serial " + serialText + " is entered twice");
+							}
+							else if(GRN_Serial[Serial_No == serialText].count() > 0)
+							{
+								errors.add("Serial " + serialText + " already exists in another receive");
+							}
+							seenSerials.add(serialKey);
+						}
+					}
+					if(serialList.size() > quantity)
+					{
+						errors.add(name + ": " + serialList.size() + " serial rows for " + quantity + " units received");
+					}
+					else if(filled > 0 && filled != quantity)
+					{
+						errors.add(name + ": enter a serial for every unit received (" + filled + " of " + quantity + ")");
+					}
+				}
+			}
+		}
+		if(lines.size() > 0 && totalReceived <= 0 && errors.size() == 0)
+		{
+			errors.add("Please enter Quantity Received for at least one item");
+		}
+		seenSegments = List();
+		placesOf = Map();
+		warehouseOf = Map();
+		for each  placeLine in lines
+		{
+			placeLineText = ifnull(placeLine.get("line_id"),"").toString();
+			placeLineName = ifnull(nameOf.get(placeLineText),"Line");
+			warehouseText = ifnull(placeLine.get("warehouse_id"),"").toString();
+			placeLineQtyText = ifnull(placeLine.get("quantity"),"0").toString();
+			placeLineQty = 0;
+			if(placeLineQtyText.isNumber())
+			{
+				placeLineQty = placeLineQtyText.toLong();
+			}
+			givenPlaces = ifnull(placeLine.get("places"),List());
+			placeList = List();
+			for each  givenPlace in givenPlaces
+			{
+				placeList.add(givenPlace);
+			}
+			if(placeList.size() == 0)
+			{
+				singlePlace = Map();
+				singlePlace.put("rack_id",ifnull(placeLine.get("rack_id"),"").toString());
+				singlePlace.put("segment_id",ifnull(placeLine.get("segment_id"),"").toString());
+				singlePlace.put("position",ifnull(placeLine.get("position"),"").toString());
+				singlePlace.put("position_note",ifnull(placeLine.get("position_note"),"").toString());
+				singlePlace.put("quantity",placeLineQty);
+				placeList.add(singlePlace);
+			}
+			if(warehouseText.isNumber())
+			{
+				whRec = Warehouse[ID == warehouseText.toLong()];
+				if(whRec.count() == 0)
+				{
+					errors.add("Warehouse not found");
+				}
+				else
+				{
+					whName = ifnull(whRec.Warehouse_Name,"Warehouse");
+					if(whRec.Active != true)
+					{
+						errors.add("Warehouse " + whName + " is not active");
+					}
+					inCountry = false;
+					if(whRec.Country != null && poCountry != null)
+					{
+						inCountry = whRec.Country.contains(poCountry);
+					}
+					if(!inCountry)
+					{
+						errors.add("Warehouse " + whName + " is not in this PO's country");
+					}
+				}
+				placesOf.put(placeLineText,placeList);
+				warehouseOf.put(placeLineText,warehouseText);
+			}
+			placeSum = 0;
+			for each  place in placeList
+			{
+				rackText = ifnull(place.get("rack_id"),"").toString();
+				segmentText = ifnull(place.get("segment_id"),"").toString();
+				positionText = ifnull(place.get("position"),"").toString().trim();
+				positionNote = ifnull(place.get("position_note"),"").toString().trim();
+				placeQtyText = ifnull(place.get("quantity"),"0").toString();
+				placeQty = 0;
+				if(placeQtyText.isNumber())
+				{
+					placeQty = placeQtyText.toLong();
+				}
+				placeSum = placeSum + placeQty;
+				if(!warehouseText.isNumber())
+				{
+					if(rackText.isNumber() || segmentText.isNumber())
+					{
+						errors.add(placeLineName + ": select the warehouse of the rack");
+					}
+				}
+				else if(placeQty <= 0)
+				{
+					errors.add(placeLineName + ": every location needs a quantity above 0");
+				}
+				if(rackText.isNumber())
+				{
+					rackRec = Warehouse_Racks[ID == rackText.toLong()];
+					if(rackRec.count() == 0)
+					{
+						errors.add("Rack not found");
+					}
+					else
+					{
+						rackWarehouse = "";
+						if(rackRec.Warehouse != null)
+						{
+							rackWarehouse = rackRec.Warehouse.toString();
+						}
+						else
+						{
+							for each  rackBayCheck in Bay[Rack == rackRec.ID] sort by ID
+							{
+								if(rackWarehouse == "")
+								{
+									if(rackBayCheck.Warehouse != null)
+									{
+										rackWarehouse = rackBayCheck.Warehouse.toString();
+									}
+								}
+							}
+						}
+						if(rackWarehouse != warehouseText)
+						{
+							errors.add("Rack " + ifnull(rackRec.Rack_Code,"") + " is not in the selected warehouse");
+						}
+						else if(rackRec.Active == false)
+						{
+							errors.add("Rack " + ifnull(rackRec.Rack_Code,"") + " is inactive");
+						}
+					}
+				}
+				else if(segmentText.isNumber())
+				{
+					errors.add(placeLineName + ": select the rack of the bay");
+				}
+				if(segmentText.isNumber())
+				{
+					segmentRec = Bay[ID == segmentText.toLong()];
+					if(segmentRec.count() == 0)
+					{
+						errors.add("Bay (segment) not found");
+					}
+					else
+					{
+						segmentCode = ifnull(segmentRec.Segment_Code,"Bay");
+						segmentStatus = "";
+						if(segmentRec.Status != null)
+						{
+							segmentStatus = ifnull(segmentRec.Status.Status_Name,"");
+						}
+						freeQty = ifnull(segmentRec.Capacity,0) - ifnull(segmentRec.Occupied_Qty,0);
+						if(segmentRec.Rack.toString() != rackText)
+						{
+							errors.add("Bay " + segmentCode + " is not in the selected rack");
+						}
+						else if(segmentRec.Active == false)
+						{
+							errors.add(segmentCode + " is inactive");
+						}
+						else if(segmentStatus == "Blocked")
+						{
+							errors.add(segmentCode + " is blocked: " + ifnull(segmentRec.Block_Reason,""));
+						}
+						else if(ifnull(segmentRec.Capacity,0) <= 0)
+						{
+							errors.add(segmentCode + " has no capacity set — set Capacity on the pallet (Bay) first");
+						}
+						else if(placeQty > freeQty)
+						{
+							errors.add(segmentCode + " has only " + freeQty + " free. This location needs " + placeQty);
+						}
+						if(seenSegments.contains(segmentText))
+						{
+							errors.add(segmentCode + " is used for more than one location — one bay per location");
+						}
+						seenSegments.add(segmentText);
+					}
+				}
+				if(positionText != "")
+				{
+					if(!positions.contains(positionText))
+					{
+						errors.add("Unknown position " + positionText + " (Centre, Left, Right, Top or Other)");
+					}
+					else if(!segmentText.isNumber())
+					{
+						errors.add(placeLineName + ": select the bay (segment) for the position " + positionText);
+					}
+					else if(positionText == "Other" && positionNote == "")
+					{
+						errors.add(placeLineName + ": describe the Other position (position note)");
+					}
+				}
+			}
+			if(warehouseText.isNumber())
+			{
+				if(placeSum != placeLineQty)
+				{
+					errors.add(placeLineName + ": the locations add up to " + placeSum + " but " + placeLineQty + " are received");
+				}
+			}
+		}
+		siteReceivedBy = ifnull(req.get("site_received_by"),"").toString().trim();
+		siteLineCount = 0;
+		for each  siteCheckLine in lines
+		{
+			if(!ifnull(siteCheckLine.get("warehouse_id"),"").toString().isNumber())
+			{
+				siteLineCount = siteLineCount + 1;
+			}
+		}
+		if(siteLineCount > 0)
+		{
+			if(siteReceivedBy == "")
+			{
+				errors.add("Direct to site: enter who received the goods at site");
+			}
+			if(poRec.count() > 0)
+			{
+				if(poRec.Project_reference == null)
+				{
+					errors.add("Direct to site: this purchase order has no project for the delivery note");
+				}
+			}
+		}
+		if(errors.size() == 0)
+		{
+			for each  recentPrRec in Purchase_Receive[Purchase_Order == poRec.ID] sort by Added_Time desc range from 1 to 1
+			{
+				if(recentPrRec.Added_User == zoho.loginuser)
+				{
+					if(zoho.currenttime.toLong() - recentPrRec.Added_Time.toLong() < 60000)
+					{
+						errors.add("A receipt for this purchase order (" + ifnull(recentPrRec.PR_No,"") + ") was saved less than a minute ago — refresh and check it before receiving again");
+					}
+				}
+			}
+		}
+		if(errors.size() > 0)
+		{
+			response = {"status":"error","code":"INVALID","message":errors.toString("; ")};
+		}
+		else
+		{
+			apiBase = "https://www.zohoapis.com/creator/v2.1/data/2point0concepts/point0concepts";
+			apiHeaders = Map();
+			apiHeaders.put("environment","development");
+			notesText = ifnull(req.get("notes"),"").toString().trim();
+			supplierDn = ifnull(req.get("supplier_dn"),"").toString().trim();
+			if(supplierDn != "")
+			{
+				notesText = ("Supplier DN: " + supplierDn + "\n" + notesText).trim();
+			}
+			prRows = List();
+			serialsOf = Map();
+			quantityOf = Map();
+			siteParents = List();
+			for each  line in lines
+			{
+				parentId = line.get("line_id").toString();
+				parentRec = PO_Line_Items[ID == parentId.toLong()];
+				quantity = line.get("quantity").toString().toLong();
+				pending = ifnull(parentRec.Quantity,0) - ifnull(parentRec.Quantity_Received,0);
+				quantityOf.put(parentId,quantity);
+				serialsOf.put(parentId,ifnull(line.get("serials"),List()));
+				rowMap = Map();
+				rowMap.put("Parent_PO_ID",poRec.ID.toString());
+				rowMap.put("Parent_Line_ID",parentId);
+				rowMap.put("is_PR",true);
+				rowMap.put("is_DN",false);
+				rowMap.put("Item_Name",parentRec.Item_Name.toString());
+				rowMap.put("Item_Description",ifnull(parentRec.Item_Description,""));
+				rowMap.put("Quantity",pending.toLong());
+				rowMap.put("Quantity_Received",quantity);
+				rowMap.put("Quantity_to_be_Received",(pending - quantity).toLong());
+				rowMap.put("Rate",ifnull(parentRec.Rate,0));
+				rowMap.put("Amount",(quantity * ifnull(parentRec.Rate,0)).round(2));
+				rowMap.put("Received",false);
+				if(parentRec.Tax != null)
+				{
+					rowMap.put("Tax",parentRec.Tax.toString());
+				}
+				if(parentRec.Discount != null)
+				{
+					rowMap.put("Discount",parentRec.Discount);
+				}
+				if(parentRec.BOQ != null)
+				{
+					rowMap.put("BOQ",parentRec.BOQ.toString());
+				}
+				if(parentRec.Estimate_Line_ID != null)
+				{
+					rowMap.put("Estimate_Line_ID",parentRec.Estimate_Line_ID.toString());
+				}
+				rowMap.put("UAE_Lineitem_ID",ifnull(parentRec.UAE_Lineitem_ID,""));
+				rowMap.put("SAR_Lineitem_ID",ifnull(parentRec.SAR_Lineitem_ID,""));
+				lineWarehouse = ifnull(warehouseOf.get(parentId),"").toString();
+				if(lineWarehouse.isNumber())
+				{
+					rowMap.put("Store_Warehouse",lineWarehouse);
+					firstPlaceList = placesOf.get(parentId);
+					firstPlace = firstPlaceList.get(0);
+					firstRack = ifnull(firstPlace.get("rack_id"),"").toString();
+					firstSegment = ifnull(firstPlace.get("segment_id"),"").toString();
+					if(firstRack.isNumber())
+					{
+						rowMap.put("Store_Rack",firstRack);
+					}
+					if(firstSegment.isNumber())
+					{
+						rowMap.put("Store_Segment",firstSegment);
+					}
+				}
+				else
+				{
+					siteParents.add(parentId);
+				}
+				prRows.add(rowMap);
+			}
+			prData = Map();
+			prData.put("PR_No","NEW");
+			prData.put("Purchase_Order",poRec.ID.toString());
+			if(poRec.Vendor_Name != null)
+			{
+				prData.put("Vendor",poRec.Vendor_Name.toString());
+			}
+			prData.put("Receive_Date",receiveDate.toString("dd-MMM-yyyy"));
+			receivedStatus = Status[Modules.contains("Purchase Receive") && Status_Name == "Received"];
+			if(receivedStatus.count() > 0)
+			{
+				prData.put("Status",receivedStatus.ID.toString());
+			}
+			prData.put("Notes",notesText);
+			projectRefText = "";
+			if(poRec.Project_reference != null)
+			{
+				refProjRec = Project[ID == poRec.Project_reference];
+				if(refProjRec.count() > 0)
+				{
+					projectRefText = ifnull(refProjRec.Project_Reference,"");
+				}
+			}
+			if(projectRefText != "")
+			{
+				prData.put("Project_Reference",projectRefText);
+			}
+			prData.put("Products",prRows);
+			resultMap = Map();
+			resultMap.put("fields",{"PR_No"});
+			resultMap.put("message",true);
+			bodyMap = Map();
+			bodyMap.put("data",prData);
+			bodyMap.put("result",resultMap);
+			apiResp = invokeurl
+			[
+				url :apiBase + "/form/Purchase_Receive"
+				type :POST
+				parameters:bodyMap.toString()
+				headers:apiHeaders
+				connection:"zoho_creator"
+			];
+			prId = 0;
+			apiError = "";
+			apiCode = ifnull(apiResp.get("code"),"").toString();
+			if(apiCode == "3000")
+			{
+				apiData = apiResp.get("data");
+				prId = apiData.get("ID").toString().toLong();
+			}
+			else
+			{
+				apiError = ifnull(apiResp.get("error"),"").toString();
+				if(apiError == "")
+				{
+					apiError = ifnull(apiResp.get("message"),"").toString();
+				}
+				if(apiError == "")
+				{
+					apiError = apiResp.toString();
+				}
+				thisapp.Creator.log_addition(zoho.loginuser,"Widget.purchase_receive","POST form/Purchase_Receive: " + bodyMap.toString(),apiResp.toString(),poRec.ID.toString(),"");
+			}
+			if(prId == 0)
+			{
+				response = {"status":"error","code":"API","message":"Creator did not save the purchase receive: " + apiError};
+			}
+			else
+			{
+				savedPrId = prId;
+				savedPrNoRec = Purchase_Receive[ID == prId];
+				if(savedPrNoRec.count() > 0)
+				{
+					savedPrNo = ifnull(savedPrNoRec.PR_No,"");
+				}
+				parentOfCopy = Map();
+				copyOfParent = Map();
+				for each  copyRec in PO_Line_Items[Purchase_Receive == prId && is_PR == true]
+				{
+					if(copyRec.Parent_Line_ID != null)
+					{
+						parentOfCopy.put(copyRec.ID.toString(),copyRec.Parent_Line_ID.toString());
+						copyOfParent.put(copyRec.Parent_Line_ID.toString(),copyRec.ID.toString());
+					}
+				}
+				storageIdsOf = Map();
+				touchedWarehouses = List();
+				warehouseBoqIds = List();
+				storageMessage = "";
+				for each  placeParent in placesOf.keys()
+				{
+					placeCopyText = ifnull(copyOfParent.get(placeParent),"").toString();
+					if(placeCopyText.isNumber())
+					{
+						placeCopyId = placeCopyText.toLong();
+						placeCopyRec = PO_Line_Items[ID == placeCopyId];
+						if(placeCopyRec.BOQ != null)
+						{
+							if(!warehouseBoqIds.contains(placeCopyRec.BOQ))
+							{
+								warehouseBoqIds.add(placeCopyRec.BOQ);
+							}
+						}
+						placeWarehouse = warehouseOf.get(placeParent).toString().toLong();
+						if(!touchedWarehouses.contains(placeWarehouse))
+						{
+							touchedWarehouses.add(placeWarehouse);
+						}
+						existingStoreIds = List();
+						for each  existingStoreRec in Storage[PR_Line == placeCopyId] sort by ID
+						{
+							existingStoreIds.add(existingStoreRec.ID);
+						}
+						placeStoreIds = List();
+						placeNo = 0;
+						for each  savePlace in placesOf.get(placeParent)
+						{
+							saveRack = ifnull(savePlace.get("rack_id"),"").toString();
+							saveSegment = ifnull(savePlace.get("segment_id"),"").toString();
+							savePosition = ifnull(savePlace.get("position"),"").toString().trim();
+							saveNote = ifnull(savePlace.get("position_note"),"").toString().trim();
+							saveQty = ifnull(savePlace.get("quantity"),"0").toString().toLong();
+							saveLabel = "Not placed";
+							saveStatus = "Pending Put-away";
+							if(saveSegment.isNumber())
+							{
+								saveBay = Bay[ID == saveSegment.toLong()];
+								saveLabel = ifnull(saveBay.Location_Path,"").trim();
+								savePallet = ifnull(saveBay.Segment_Code,"").trim();
+								if(saveLabel == "")
+								{
+									saveLabel = savePallet;
+								}
+								else if(savePallet != "")
+								{
+									saveLabel = saveLabel + " · " + savePallet;
+								}
+								if(savePosition != "")
+								{
+									saveLabel = saveLabel + " · " + savePosition;
+								}
+								if(savePosition == "Other")
+								{
+									saveLabel = saveLabel + " (" + saveNote + ")";
+								}
+								saveStatus = "In Stock";
+							}
+							saveLabel = saveLabel + " · " + saveQty;
+							saveStoreId = 0;
+							if(placeNo < existingStoreIds.size())
+							{
+								saveStoreId = existingStoreIds.get(placeNo);
+							}
+							else
+							{
+								saveStoreId = insert into Storage
+								[
+									Added_User=zoho.loginuser
+									Purchase_Receive=prId
+									Purchase_Order=poRec.ID
+									PR_Line=placeCopyId
+									Item=placeCopyRec.Item_Name
+									Country=poRec.Country
+									Qty=saveQty
+									Delivered_Qty=0
+									Stock_Status=saveStatus
+								];
+							}
+							saveStoreRec = Storage[ID == saveStoreId];
+							saveStoreRec.Qty=saveQty;
+							saveStoreRec.Delivered_Qty=0;
+							saveStoreRec.Warehouse=placeWarehouse;
+							saveStoreRec.BOQ_Line=placeCopyRec.BOQ;
+							if(saveRack.isNumber())
+							{
+								saveStoreRec.Rack=saveRack.toLong();
+							}
+							else
+							{
+								saveStoreRec.Rack=null;
+							}
+							if(saveSegment.isNumber())
+							{
+								saveStoreRec.Segment=saveSegment.toLong();
+								saveStoreRec.Bay_Select=saveSegment.toLong();
+								saveStoreRec.Level_Select=saveSegment.toLong();
+								saveStoreRec.Side_Select=saveSegment.toLong();
+							}
+							else
+							{
+								saveStoreRec.Segment=null;
+								saveStoreRec.Bay_Select=null;
+								saveStoreRec.Level_Select=null;
+								saveStoreRec.Side_Select=null;
+							}
+							saveStoreRec.Position=savePosition;
+							if(savePosition == "Other")
+							{
+								saveStoreRec.Position_Note=saveNote;
+							}
+							else
+							{
+								saveStoreRec.Position_Note="";
+							}
+							saveStoreRec.Location_Label=saveLabel;
+							saveStoreRec.Stock_Status=saveStatus;
+							placeStoreIds.add(saveStoreId);
+							placeNo = placeNo + 1;
+						}
+						storageIdsOf.put(placeParent,placeStoreIds);
+					}
+				}
+				if(placesOf.size() > 0 && storageIdsOf.size() == 0)
+				{
+					storageMessage = "Received, but the storage rows could not be linked to the receipt lines — set the location in the Purchase Receive.";
+				}
+				serialsGiven = 0;
+				serialIndex = Map();
+				for each  serialRec in GRN_Serial[Purchase_Receive == prId] sort by ID
+				{
+					serialParent = "";
+					if(serialRec.PO_Line != null)
+					{
+						serialParent = ifnull(parentOfCopy.get(serialRec.PO_Line.toString()),"").toString();
+					}
+					if(serialParent != "")
+					{
+						unitPosition = ifnull(serialIndex.get(serialParent),0);
+						serialIndex.put(serialParent,unitPosition + 1);
+						unitList = ifnull(serialsOf.get(serialParent),List());
+						unitPlace = -1;
+						if(unitPosition < unitList.size())
+						{
+							unit = unitList.get(unitPosition);
+							unitSerial = ifnull(unit.get("serial_no"),"").toString().trim();
+							unitMac = ifnull(unit.get("mac"),"").toString().trim();
+							unitMonths = ifnull(unit.get("warranty_months"),"").toString().trim();
+							unitStart = ifnull(unit.get("warranty_start"),"").toString().trim();
+							unitPlaceText = ifnull(unit.get("place"),"").toString();
+							if(unitPlaceText.isNumber())
+							{
+								unitPlace = unitPlaceText.toLong();
+							}
+							if(unitSerial != "")
+							{
+								serialRec.Serial_No=unitSerial;
+								serialsGiven = serialsGiven + 1;
+							}
+							if(unitMac != "")
+							{
+								serialRec.MAC_Address=unitMac;
+							}
+							if(unitMonths.isNumber())
+							{
+								serialRec.Warranty_Months=unitMonths.toLong();
+							}
+							if(unitStart != "")
+							{
+								serialRec.Warranty_Start=unitStart.toDate();
+								if(unitMonths.isNumber())
+								{
+									serialRec.Warranty_End=unitStart.toDate().addMonth(unitMonths.toLong()).subDay(1);
+								}
+							}
+						}
+						if(siteParents.contains(serialParent))
+						{
+							serialRec.Storage=null;
+							serialRec.Serial_Status="Delivered";
+						}
+						else
+						{
+							unitStoreIds = ifnull(storageIdsOf.get(serialParent),List());
+							if(unitPlace < 0)
+							{
+								runningQty = 0;
+								runningNo = 0;
+								for each  runPlace in ifnull(placesOf.get(serialParent),List())
+								{
+									runningQty = runningQty + ifnull(runPlace.get("quantity"),"0").toString().toLong();
+									if(unitPlace < 0)
+									{
+										if(unitPosition < runningQty)
+										{
+											unitPlace = runningNo;
+										}
+									}
+									runningNo = runningNo + 1;
+								}
+							}
+							if(unitPlace >= 0)
+							{
+								if(unitPlace < unitStoreIds.size())
+								{
+									serialRec.Storage=unitStoreIds.get(unitPlace);
+								}
+							}
+						}
+					}
+				}
+				siteBoqIds = List();
+				siteDnLines = List();
+				siteCopyIds = List();
+				for each  siteParent in siteParents
+				{
+					siteCopyText = ifnull(copyOfParent.get(siteParent),"").toString();
+					if(siteCopyText.isNumber())
+					{
+						siteCopyId = siteCopyText.toLong();
+						siteCopyIds.add(siteCopyId);
+						for each  siteSerialRec in GRN_Serial[PO_Line == siteCopyId]
+						{
+							siteSerialRec.Storage=null;
+						}
+						delete from Storage[PR_Line == siteCopyId];
+						siteDnLine = Map();
+						siteDnLine.put("line_id",siteParent);
+						siteDnLine.put("quantity",ifnull(quantityOf.get(siteParent),0));
+						siteDnLines.add(siteDnLine);
+						siteLineRec = PO_Line_Items[ID == siteParent.toLong()];
+						if(siteLineRec.count() > 0)
+						{
+							if(siteLineRec.BOQ != null)
+							{
+								if(!siteBoqIds.contains(siteLineRec.BOQ))
+								{
+									siteBoqIds.add(siteLineRec.BOQ);
+								}
+							}
+						}
+					}
+				}
+				for each  touchedWarehouse in touchedWarehouses
+				{
+					thisapp.Stock.Recalc_Warehouse(touchedWarehouse);
+				}
+				siteDnId = "";
+				siteDnNo = "";
+				siteMessage = "";
+				if(siteDnLines.size() > 0)
+				{
+					siteDnReq = Map();
+					siteDnReq.put("action","create");
+					siteDnReq.put("project_id",poRec.Project_reference.toString());
+					siteDnReq.put("lines",siteDnLines);
+					siteDnReq.put("challan_type","Others");
+					siteDnReq.put("dn_date",receiveDate.toString("dd-MMM-yyyy"));
+					if(poRec.Warehouse != null)
+					{
+						siteDnReq.put("warehouse_id",poRec.Warehouse.toString());
+					}
+					siteDnReq.put("notes","Delivered direct to site on receipt " + savedPrNo);
+					siteDnResp = thisapp.Widget.purchase_delivery(siteDnReq.toString());
+					if(ifnull(siteDnResp.get("status"),"").toString() == "success")
+					{
+						siteDnId = ifnull(siteDnResp.get("id"),"").toString();
+						siteDnNo = ifnull(siteDnResp.get("DN_No"),"").toString();
+						siteStatusReq = Map();
+						siteStatusReq.put("action","status");
+						siteStatusReq.put("dn_id",siteDnId);
+						siteStatusReq.put("status_index","67");
+						siteStatusReq.put("delivered_date",receiveDate.toString("dd-MMM-yyyy"));
+						siteStatusReq.put("received_by",siteReceivedBy);
+						siteStatusResp = thisapp.Widget.purchase_delivery(siteStatusReq.toString());
+						if(ifnull(siteStatusResp.get("status"),"").toString() != "success")
+						{
+							siteMessage = "Delivery note " + siteDnNo + " was created but not marked Delivered: " + ifnull(siteStatusResp.get("message"),"").toString();
+						}
+						if(siteDnId.isNumber())
+						{
+							sitePrRec = Purchase_Receive[ID == prId];
+							if(sitePrRec.count() > 0)
+							{
+								sitePrRec.Delivery_Note=siteDnId.toLong();
+							}
+							for each  siteDnSerial in GRN_Serial[PO_Line in siteCopyIds]
+							{
+								siteDnSerial.Delivery_Note=siteDnId.toLong();
+							}
+						}
+					}
+					else
+					{
+						siteMessage = "Received, but the delivery note for the site could not be created: " + ifnull(siteDnResp.get("message"),"").toString() + " — create it from Delivery notes";
+					}
+				}
+				for each  siteBoqId in siteBoqIds
+				{
+					siteBoqRec = BOQ[ID == siteBoqId];
+					if(siteBoqRec.count() > 0)
+					{
+						if(ifnull(siteBoqRec.Qty_Delivered,0) >= ifnull(siteBoqRec.Quantity,0))
+						{
+							siteBoqRec.Delivered_to_Customer="Yes";
+							if(siteBoqRec.Date_delivered_to_customer == null)
+							{
+								siteBoqRec.Date_delivered_to_customer=receiveDate;
+							}
+						}
+					}
+				}
+				whStatusKey = "Dubai Warehouse";
+				if(poRec.Country != null)
+				{
+					if(poRec.Country.Index_field == 2)
+					{
+						whStatusKey = "Riyadh Warehouse";
+					}
+				}
+				whBoqStatus = Status[Modules.contains("BOQ") && Status_Name.contains(whStatusKey)];
+				partBoqStatus = Status[Modules.contains("BOQ") && Status_Name == "Partially Received"];
+				for each  whBoqId in warehouseBoqIds
+				{
+					thisapp.Delivery.Recalc_BOQ(whBoqId);
+					whBoqRec = BOQ[ID == whBoqId];
+					if(whBoqRec.count() > 0)
+					{
+						if(ifnull(whBoqRec.Qty_Delivered,0) <= 0)
+						{
+							if(ifnull(whBoqRec.Qty_Received,0) >= ifnull(whBoqRec.Quantity,0))
+							{
+								if(whBoqStatus.count() > 0)
+								{
+									whBoqRec.Status=whBoqStatus.ID;
+								}
+							}
+							else if(ifnull(whBoqRec.Qty_Received,0) > 0)
+							{
+								if(partBoqStatus.count() > 0)
+								{
+									whBoqRec.Status=partBoqStatus.ID;
+								}
+							}
+						}
+					}
+				}
+				if(serialsGiven > 0)
+				{
+					serialBoqIds = List();
+					for each  boqSerialRec in GRN_Serial[Purchase_Receive == prId]
+					{
+						if(boqSerialRec.BOQ_Line != null)
+						{
+							if(!serialBoqIds.contains(boqSerialRec.BOQ_Line))
+							{
+								serialBoqIds.add(boqSerialRec.BOQ_Line);
+							}
+						}
+					}
+					for each  serialBoqId in serialBoqIds
+					{
+						thisapp.Delivery.Sync_Serials_To_Costing(serialBoqId);
+					}
+				}
+				prRec = Purchase_Receive[ID == prId];
+				savedCopies = PO_Line_Items[Purchase_Receive == prId && is_PR == true].count();
+				if(prRec.count() == 0 || savedCopies != lines.size())
+				{
+					response = {"status":"success","id":prId.toString(),"PR_No":savedPrNo,"Books_Synced":false,"Warning":"The purchase receive " + savedPrNo + " was saved, but only " + savedCopies + " of " + lines.size() + " lines were linked — check it in Creator before receiving again"};
+				}
+				else
+				{
+					checks = List();
+					for each  checkId in quantityOf.keys()
+					{
+						afterRec = PO_Line_Items[ID == checkId.toLong()];
+						expected = ifnull(receivedBefore.get(checkId),0) + ifnull(quantityOf.get(checkId),0);
+						actual = ifnull(afterRec.Quantity_Received,0);
+						if(actual != expected)
+						{
+							checks.add(ifnull(afterRec.Item_Description,"Line") + ": received total is " + actual + ", expected " + expected);
+						}
+					}
+					savedPoRec = Purchase_Order[ID == poRec.ID];
+					allReceived = ifnull(savedPoRec.PR_All_Received,false);
+					poStatusName = "Partially Received";
+					if(allReceived == true)
+					{
+						poStatusName = "Received";
+					}
+					poStatusRec = Status[Modules.contains("Purchase Order") && Status_Name == poStatusName];
+					if(poStatusRec.count() > 0)
+					{
+						savedPoRec.PO_Status=poStatusRec.ID;
+					}
+					booksId = ifnull(prRec.UAE_ZB_ID,"");
+					if(booksId == "")
+					{
+						booksId = ifnull(prRec.SAR_ZB_ID,"");
+					}
+					booksMessage = "";
+					if(booksId == "")
+					{
+						booksMessage = "Saved in Creator, but Zoho Books has no purchase receive yet — see Developer_Log (Purchase Receive In Books). The PO must be in Books first.";
+					}
+					if(checks.size() > 0)
+					{
+						thisapp.Creator.log_addition(zoho.loginuser,"Widget.purchase_receive","Quantity check of " + ifnull(prRec.PR_No,""),checks.toString("; "),prId.toString(),"");
+					}
+					shownPrNo = ifnull(prRec.Purchase_Receive_Books_No,"").trim();
+					if(shownPrNo == "")
+					{
+						shownPrNo = ifnull(prRec.PR_No,"");
+					}
+					response = {"status":"success","id":prId.toString(),"PR_No":shownPrNo,"Books_Synced":booksId != "","Books_ID":booksId,"Books_Message":booksMessage,"Storage_Message":storageMessage,"Check_Message":checks.toString("; "),"PR_All_Received":allReceived,"Delivery_Note_ID":siteDnId,"Delivery_Note_No":siteDnNo,"Site_Message":siteMessage};
+				}
+			}
+		}
+	}
+	catch (e)
+	{
+		if(savedPrId > 0)
+		{
+			response = {"status":"success","id":savedPrId.toString(),"PR_No":savedPrNo,"Books_Synced":false,"Warning":"The purchase receive " + savedPrNo + " was saved, but a later step failed: " + e.toString() + " — check it in Creator before receiving again"};
+		}
+		else
+		{
+			response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+		}
+	}
+	return response;
+}

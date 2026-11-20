@@ -1,0 +1,5 @@
+div_name = ifnull(line.Division,"");
+if(div_name == "")
+{
+	div_name = ifnull(product.Division,"");
+}

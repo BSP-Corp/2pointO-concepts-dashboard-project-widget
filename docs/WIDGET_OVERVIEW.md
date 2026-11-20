@@ -4,42 +4,37 @@ The Project Console is one Zoho Creator widget used on three pages: **Home**, **
 
 ## Home — Project Search Dashboard
 
-The Home page helps users find a project and see how all projects are performing.
+The Home page helps users find a project and see how all projects are performing, on one screen without scrolling.
 
-- **Search by reference** finds any estimate and opens its Cost Analysis.
-- **Go To** lists approved projects and opens the selected one.
-- **Dashboard charts** show task and delivery completion, project health, project type, lifecycle stage, project timelines (Gantt), monthly task trends, cost vs quote and open issues.
-- **Pivot table** lets users analyse projects by manager, type, stage, client or health.
+- **Search** finds any estimate by reference and opens its Cost Analysis; **Go To** lists approved projects and opens the selected one.
+- **Overview** shows completion, project health, the lifecycle pipeline, milestones, project team & core data, and risks.
+- **Timelines, Trends, Pivot and Projects** views show the Gantt, monthly task trends, cost vs quote, issues, project types, employees, the pivot table and project cards.
 
 ## Project Widget
 
-The Project Widget shows everything about one project in a single place.
+The Project Widget shows everything about one project in a single window.
 
-- **Header** shows the project details, stage, health, dates, customer and contract value.
-- **Status pipeline** moves the project through 14 fixed stages and keeps a full status history.
-- **Overview** summarises progress, deliveries, today's tasks, open risks and the next milestone.
-- **Procurement** lists the BOQ items and purchase orders, and allows creating a PO.
-- **Asset Register** shows work packages and asset lines, where the team updates execution, serial, warranty and network details.
-- **Milestones** and **Tasks** follow the Zoho Projects layout: Milestone → Task List → Task → Subtask.
-- **Risk Register** and **Risk Dashboard** manage project risks, with score and severity calculated automatically.
-- **Activity** shows who changed what and when.
+- **Header** shows the project facts and a compact status stepper with progress; the next stage is one click, other moves are under More.
+- **Overview** shows priority tasks, deliveries, today's plan, open risks, the next milestone and the team.
+- **Milestones** follow the Zoho Projects layout: Milestone → Task List → Task → Subtask.
+- **Execution** shows each work package with its lines (BOQ and procurement read-only, execution and asset details editable) and its tasks.
+- **Procurement** shows the procurement results read-only and opens the Procurement module.
+- **Risks** has the register (with an inline add row) and the dashboard; score and severity are calculated.
+- **Asset Register** lists every asset with serial, warranty and network details; **Activity** shows who changed what and when.
 
-Users can edit values directly in the lists: click a value, change it, and press Enter to save it to Creator.
+Users edit values directly in the lists: click a value, change it, and press Enter or click away to save it to Creator.
 
 ## Procurement Schedule
 
-The Procurement Schedule shows one row per BOQ item, from purchasing to delivery, on a compact page.
+The Procurement Schedule is the working module for purchasing, one row per BOQ item.
 
-- **Tabs** filter items into To order, In progress and Received.
-- **Item popup** shows full details and lets users update PO date, status, transit mode and ETA.
-- **Create purchase order** raises one PO per vendor from the selected items, with partial quantities allowed.
-- The PO is **created in Zoho Creator first**, then **sent to Zoho Books**, and the PO number and status are written back to each item.
+- **Frozen core columns** and five sections (Purchasing, Transit, Receiving, Payments, Packages) with bookmarks that scroll sideways and a Columns menu.
+- **Create purchase order** opens a panel from the left: tick lines of one vendor, raise a new PO or add to an existing one. The PO is created in Zoho Creator first, then sent to Zoho Books.
+- **Receive goods** records a Purchase Receive with the warehouse location; **delivery notes** are created from received stock and marked delivered.
 - Stock changes only through goods receipt, never by changing a status or a date.
 
 ## Not Yet Available
 
-These items need new forms or fields in Creator before they can be added:
-
-- Delivery notes
-- PO payment tracking (currently in Zoho Books)
+- PO payment tracking (payments are in Zoho Books)
+- Serial numbers per received unit (PO_Line_Items has no serial field)
 - Change orders and generated PDF documents

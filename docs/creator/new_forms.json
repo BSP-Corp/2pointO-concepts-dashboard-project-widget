@@ -1,0 +1,16 @@
+{
+  "Purchase_Receive": {
+    "fields": [
+      "Delivery_Note"
+    ],
+    "lookups": {
+      "Delivery_Note": "Delivery_Note"
+    }
+  },
+  "PO_Line_Items": {
+    "fields": [
+      "Division"
+    ],
+    "lookups": {}
+  }
+}

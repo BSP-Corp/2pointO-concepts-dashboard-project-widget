@@ -1,0 +1,5 @@
+if(inProcurement)
+{
+	lockedCount = lockedCount + 1;
+	boqRec.Quantity=groupData.get("quantity");
+}

@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { Chip, Empty, Kpi, Panel, Section } from '@/features/console/ui'
 import { isComplete, severityOf } from '@/features/risk/calc'
 import { formatDate, formatPct, formatQty } from '@/lib/utils'
 import type { TabContext } from '../ProjectTabs'
-import { deliveryByCategory, isDelayed, isDone, isTaskList, priorityTasks, progress, ratio, teamWithToday, todaysTasks } from '../model'
+import { TeamEditor } from '../TeamEditor'
+import { deliveryByCategory, isDelayed, isDone, isTaskList, priorityTasks, ratio, teamWithToday, todaysTasks } from '../model'
 
 const initials = (name: string) =>
   name
@@ -12,22 +14,25 @@ const initials = (name: string) =>
     .map((w) => w[0]!.toUpperCase())
     .join('') || '—'
 
-/** Overview: what is the priority work, how much is on site, what is planned today, who is working. */
+/** Overview: priority work, what is on site, what is planned today, who is working. Progress is in the header stepper (PPT 3a). */
 export function OverviewTab(c: TabContext) {
   const { tasks, risks } = c.queries
   const t = tasks.data
-  const p = t && c.milestones ? progress(t, c.milestones, c.today) : undefined
   const today = t ? todaysTasks(t, c.today) : []
   const team = teamWithToday(c.details.team, today)
+  const [editTeam, setEditTeam] = useState(false)
   const cats = c.boq ? deliveryByCategory(c.boq.rows) : undefined
-  const totals = cats?.reduce((a, x) => ({ total: a.total + x.total, delivered: a.delivered + x.delivered, inTransit: a.inTransit + x.inTransit, notOrdered: a.notOrdered + x.notOrdered }), { total: 0, delivered: 0, inTransit: 0, notOrdered: 0 })
+  const totals = cats?.reduce((a, x) => ({ total: a.total + x.total, delivered: a.delivered + x.delivered, inTransit: a.inTransit + x.inTransit, notOrdered: a.notOrdered + x.notOrdered }), {
+    total: 0,
+    delivered: 0,
+    inTransit: 0,
+    notOrdered: 0,
+  })
   const next = c.milestones?.find((m) => m.state !== 'Completed')
 
   return (
     <div className="gc-stack">
-      <div className="gc-kpis">
-        <Kpi tone="blue" label="Overall progress" value={p ? formatPct(p.actual === null ? null : p.actual / 100) : '…'} sub={p ? `Planned ${formatPct(p.planned === null ? null : p.planned / 100)} by today` : undefined} />
-        <Kpi tone="green" label="Assets delivered" value={totals ? (totals.total ? `${formatQty(totals.delivered)} / ${formatQty(totals.total)}` : '—') : '…'} sub={totals ? `${formatQty(totals.inTransit)} ordered / in transit` : undefined} />
+      <div className="gc-kpis gc-kpis--flat">
         <Kpi
           tone="violet"
           label="Tasks planned today"
@@ -40,15 +45,20 @@ export function OverviewTab(c: TabContext) {
           value={risks.data ? risks.data.filter((r) => !isComplete(r)).length : risks.error ? '—' : '…'}
           sub={risks.data ? `${risks.data.filter((r) => !isComplete(r) && severityOf(r) === 'Critical').length} critical` : risks.error ? 'Risk register unavailable' : undefined}
         />
-        <Kpi tone="amber" label="Next milestone" value={c.milestones ? (next ? formatDate(next.end) : '—') : '…'} sub={next ? `${next.milestone.name}${next.state === 'Delayed' ? ' (delayed)' : ''}` : c.milestones ? 'No open milestone' : undefined} />
+        <Kpi
+          tone="amber"
+          label="Next milestone"
+          value={c.milestones ? (next ? formatDate(next.end) : '—') : '…'}
+          sub={next ? `${next.milestone.name}${next.state === 'Delayed' ? ' (delayed)' : ''}` : c.milestones ? 'No open milestone' : undefined}
+        />
       </div>
 
       <div className="gc-grid-2">
         <Panel
           title="Priority tasks"
           actions={
-            <button type="button" className="gc-link" onClick={() => c.onTab('tasks')}>
-              View all tasks
+            <button type="button" className="gc-link" onClick={() => c.onTab('execution')}>
+              Work packages
             </button>
           }
         >
@@ -142,8 +152,22 @@ export function OverviewTab(c: TabContext) {
           </Section>
         </Panel>
 
-        <Panel title="Assigned team" actions={<span className="gc-small gc-soft">{`${team.technicians} technician${team.technicians === 1 ? '' : 's'} · ${team.users} user${team.users === 1 ? '' : 's'}`}</span>}>
-          {team.rows.length === 0 ? (
+        <Panel
+          title="Assigned team"
+          actions={
+            <span className="gc-team-head">
+              <span className="gc-small gc-soft">{`${team.technicians} technician${team.technicians === 1 ? '' : 's'} · ${team.users} user${team.users === 1 ? '' : 's'}`}</span>
+              {c.details.canEdit && !editTeam && (
+                <button type="button" className="gc-btn gc-btn--sm" onClick={() => setEditTeam(true)}>
+                  {team.rows.length ? 'Edit team' : '+ Add member'}
+                </button>
+              )}
+            </span>
+          }
+        >
+          {editTeam ? (
+            <TeamEditor projectId={c.project.id} team={c.details.team} onDone={() => setEditTeam(false)} />
+          ) : team.rows.length === 0 ? (
             <Empty>No team members on this project (Project Team grid)</Empty>
           ) : (
             <ul className="gc-rows">

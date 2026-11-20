@@ -1,0 +1,8 @@
+custom_fields_list = List();
+if(ifnull(dc.Project_Reference,"").trim() != "")
+{
+	custom_field = Map();
+	custom_field.put("api_name","cf_reference");
+	custom_field.put("value",dc.Project_Reference);
+	custom_fields_list.add(custom_field);
+}

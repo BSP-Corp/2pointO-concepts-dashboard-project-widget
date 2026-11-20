@@ -1,6 +1,3 @@
-// Widget.project_details(string quo_data) — project header extras. Custom API: Widget_Project_Details (GET, quo_data).
-// quo_data: {"project_id":"…"} → customer (live from Client_Name), contacts, owner, team (Project Team grid), pipeline stages
-// (static order from Widget.status_order, with Status record IDs), task / BOQ status orders, and the caller's edit / admin permission.
 map Widget.project_details(string quo_data)
 {
 	response = Map();
@@ -61,19 +58,23 @@ map Widget.project_details(string quo_data)
 				{
 					memberRec = Users[ID == teamRow.Team_Member];
 					projectRole = "";
+					projectRoleId = "";
 					if(teamRow.Project_Role != null)
 					{
 						projectRole = ifnull(teamRow.Project_Role.Role,"");
+						projectRoleId = teamRow.Project_Role.toString();
 					}
-					team.add({"ID":memberRec.ID.toString(),"Name":ifnull(memberRec.Name,""),"Role":ifnull(memberRec.Role,""),"Project_Role":projectRole,"Status":ifnull(memberRec.Status,"")});
+					if(memberRec.count() > 0)
+					{
+						team.add({"ID":memberRec.ID.toString(),"Name":ifnull(memberRec.Name,""),"Role":ifnull(memberRec.Role,""),"Project_Role":projectRole,"Status":ifnull(memberRec.Status,""),"Row_ID":teamRow.ID.toString(),"Role_ID":projectRoleId});
+					}
 				}
 			}
-			// Pipeline in the static order (Widget.status_order); ID = the Status record with that name ("" when none exists)
 			order = thisapp.Widget.status_order();
 			stages = List();
 			for each  stageName in order.get("project")
 			{
-				stageRec = Status[Status_Name == stageName];
+				stageRec = Status[Modules.contains("Project") && Status_Name == stageName];
 				stageId = "";
 				if(stageRec.count() > 0)
 				{
@@ -83,7 +84,7 @@ map Widget.project_details(string quo_data)
 			}
 			for each  stageName in order.get("anytime")
 			{
-				stageRec = Status[Status_Name == stageName];
+				stageRec = Status[Modules.contains("Project") && Status_Name == stageName];
 				stageId = "";
 				if(stageRec.count() > 0)
 				{
@@ -91,59 +92,24 @@ map Widget.project_details(string quo_data)
 				}
 				stages.add({"ID":stageId,"Status_Name":stageName,"anytime":true});
 			}
-			// Edit permission (architecture: the project team updates execution, asset & network fields):
-			// app admin, Users.Role Administrator / Management / Project Manager, this project's Project Manager, or a member
-			// of its Project Team. The login is matched to Users.Email without regard to upper / lower case.
-			isAdmin = zoho.loginuser == zoho.adminuser || zoho.loginuserid.equalsIgnoreCase(zoho.adminuserid);
-			loginEmail = zoho.loginuserid.trim().toLowerCase();
-			loginRec = Users[Email == zoho.loginuserid];
-			if(loginRec.count() == 0)
+			access = thisapp.Widget.can_edit(projRec.ID.toString());
+			canEdit = access.get("can_edit");
+			isAdmin = access.get("is_admin");
+			editReason = access.get("reason");
+			userName = access.get("user_name");
+			crmDealId = "";
+			if(projRec.Accepted_Estimate != null)
 			{
-				for each  userRec in Users[Email != ""]
+				dealEstimate = Estimate[ID == projRec.Accepted_Estimate];
+				if(dealEstimate.count() > 0)
 				{
-					if(ifnull(userRec.Email,"").trim().toLowerCase() == loginEmail)
+					if(dealEstimate.Deals != null)
 					{
-						loginRec = Users[ID == userRec.ID];
+						crmDealId = dealEstimate.Deals.toString().trim();
 					}
 				}
 			}
-			loginRole = "";
-			loginId = "";
-			if(loginRec.count() > 0)
-			{
-				loginRole = ifnull(loginRec.Role,"");
-				loginId = loginRec.ID.toString();
-			}
-			isAdmin = isAdmin || loginRole == "Administrator";
-			isManager = loginId != "" && ifnull(projRec.Project_Manager,"").toString() == loginId;
-			onTeam = false;
-			for each  memberRow in projRec.Pro
-			{
-				if(loginId != "" && ifnull(memberRow.Team_Member,"").toString() == loginId)
-				{
-					onTeam = true;
-				}
-			}
-			// Everyone with access to the Project Widget page may edit (Creator page permissions decide access)
-			canEdit = true;
-			editReason = "";
-			if(!canEdit)
-			{
-				if(loginId == "")
-				{
-					editReason = "Read only: your login (" + zoho.loginuserid + ") has no record in Users. Add it to Users (Email) to edit.";
-				}
-				else
-				{
-					editReason = "Read only: you are not this project's Project Manager or on its Project Team, and your Users role (" + loginRole + ") is not Administrator, Management or Project Manager.";
-				}
-			}
-			userName = zoho.loginuser;
-			if(loginRec.count() > 0 && ifnull(loginRec.Name,"") != "")
-			{
-				userName = loginRec.Name;
-			}
-			response = {"status":"success","user":userName,"customer":customer,"contacts":contacts,"owner":owner,"team":team,"stages":stages,"task_order":order.get("task"),"boq_order":order.get("boq"),"can_edit":canEdit,"is_admin":isAdmin,"edit_reason":editReason};
+			response = {"status":"success","user":userName,"customer":customer,"contacts":contacts,"owner":owner,"team":team,"stages":stages,"task_order":order.get("task"),"boq_order":order.get("boq"),"can_edit":canEdit,"is_admin":isAdmin,"edit_reason":editReason,"crm_deal_id":crmDealId};
 		}
 	}
 	catch (e)

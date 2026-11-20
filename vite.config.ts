@@ -11,9 +11,7 @@ function creatorWidget(): Plugin {
     apply: 'build',
     enforce: 'post',
     transformIndexHtml(html) {
-      return html
-        .replace(/<script type="module" crossorigin src="([^"]+)"><\/script>/, '<script defer src="$1"></script>')
-        .replace(/<link rel="stylesheet" crossorigin /g, '<link rel="stylesheet" ')
+      return html.replace(/<script type="module" crossorigin src="([^"]+)"><\/script>/, '<script defer src="$1"></script>').replace(/<link rel="stylesheet" crossorigin /g, '<link rel="stylesheet" ')
     },
     generateBundle(_, bundle) {
       // Creator's index file is app/widget.html; the dev server keeps using ./index.html.
@@ -53,5 +51,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // node_modules lives in node_modules.nosync (kept out of iCloud); only the project's own tests run
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
 })

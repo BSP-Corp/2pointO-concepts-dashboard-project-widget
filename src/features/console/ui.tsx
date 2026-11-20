@@ -23,7 +23,11 @@ export function Kpi({ label, value, sub, tone = 'blue', icon }: { label: string;
   return (
     <div className={`gc-kpi gc-kpi--${tone}`}>
       <span className="gc-kpi__label">
-        {icon && <span className="gc-kpi__icon" aria-hidden="true">{icon}</span>}
+        {icon && (
+          <span className="gc-kpi__icon" aria-hidden="true">
+            {icon}
+          </span>
+        )}
         {label}
       </span>
       <span className="gc-kpi__value">{value}</span>
@@ -100,9 +104,7 @@ export function NotConfigured({ what }: { what: string }) {
   return (
     <div className="gc-panel gc-notice" role="status">
       <strong>{what} is not set up in Creator yet</strong>
-      <span className="gc-soft gc-small">
-        Create the Activity_Stream form, then paste the updated functions (see docs/ACTIVITY_STREAM.md). This section fills in automatically once they exist.
-      </span>
+      <span className="gc-soft gc-small">Create the Activity_Stream form, then paste the updated functions (see docs/ACTIVITY_STREAM.md). This section fills in automatically once they exist.</span>
     </div>
   )
 }
@@ -117,7 +119,17 @@ export function Chip({ children, tone }: { children: ReactNode; tone?: 'good' | 
 }
 
 /** Renders a query's data, or its skeleton / error, so every section loads (and fails) on its own. */
-export function Loaded<T>({ query, label, height = 180, children }: { query: { data?: T; error: Error | null; refetch: () => unknown }; label: string; height?: number; children: (data: T) => ReactNode }) {
+export function Loaded<T>({
+  query,
+  label,
+  height = 180,
+  children,
+}: {
+  query: { data?: T; error: Error | null; refetch: () => unknown }
+  label: string
+  height?: number
+  children: (data: T) => ReactNode
+}) {
   if (query.error) return <ErrorPanel error={query.error} onRetry={() => query.refetch()} />
   if (query.data === undefined) return <div className="gc-skeleton" style={{ height }} aria-busy="true" aria-label={label} />
   return <>{children(query.data)}</>
@@ -165,6 +177,59 @@ export function Modal({ title, onClose, children, wide = false, className = '' }
   )
 }
 
+/**
+ * Fixed side panel (PPT: inline editing, side panels instead of pop-ups). Slides in from the left or right edge, freezes
+ * the page behind it (no background scroll) and scrolls inside; Esc, ✕ or a click on the shade closes it unless `busy`.
+ */
+export function SidePanel({
+  title,
+  subtitle,
+  side = 'left',
+  busy = false,
+  onClose,
+  footer,
+  children,
+  className = '',
+}: {
+  title: string
+  subtitle?: ReactNode
+  side?: 'left' | 'right'
+  busy?: boolean
+  onClose: () => void
+  footer?: ReactNode
+  children: ReactNode
+  className?: string
+}) {
+  const id = useId()
+  const head = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    const unlock = lockBackground()
+    head.current?.focus()
+    return unlock
+  }, [])
+  const close = () => !busy && onClose()
+  return createPortal(
+    <div className={`gc-side-shade gc-side-shade--${side}`} onMouseDown={(e) => e.target === e.currentTarget && close()} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), close())}>
+      <aside className={`gc-side gc-side--${side} ${className}`} role="dialog" aria-modal="true" aria-labelledby={id}>
+        <header className="gc-side__head">
+          <div className="gc-side__title">
+            <h2 id={id} className="gc-h2" tabIndex={-1} ref={head}>
+              {title}
+            </h2>
+            {subtitle && <div className="gc-side__sub">{subtitle}</div>}
+          </div>
+          <button type="button" className="gc-icon-btn" onClick={close} aria-label="Close" disabled={busy}>
+            ✕
+          </button>
+        </header>
+        <div className="gc-side__body">{children}</div>
+        {footer && <footer className="gc-side__foot">{footer}</footer>}
+      </aside>
+    </div>,
+    document.body,
+  )
+}
+
 /** Freezes the widget behind a dialog; returns the undo. Nested dialogs stack safely. */
 let locks = 0
 export function lockBackground() {
@@ -172,12 +237,14 @@ export function lockBackground() {
   const before = document.activeElement as HTMLElement | null
   if (locks++ === 0) {
     document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
     root?.setAttribute('inert', '')
     root?.setAttribute('aria-hidden', 'true')
   }
   return () => {
     if (--locks === 0) {
       document.body.style.overflow = ''
+      document.documentElement.style.overflow = ''
       root?.removeAttribute('inert')
       root?.removeAttribute('aria-hidden')
     }
@@ -189,7 +256,17 @@ export function lockBackground() {
 export const CountBadge = ({ n }: { n?: number }) => (n === undefined ? null : <span className="gc-badge">{n}</span>)
 
 /** Section state wrapper: loading, error (Retry), empty ("No records for this project"), or content. */
-export function Section<T>({ query, empty, isEmpty, children }: { query: { data?: T; error: Error | null; refetch: () => unknown }; empty?: string; isEmpty?: (d: T) => boolean; children: (d: T) => ReactNode }) {
+export function Section<T>({
+  query,
+  empty,
+  isEmpty,
+  children,
+}: {
+  query: { data?: T; error: Error | null; refetch: () => unknown }
+  empty?: string
+  isEmpty?: (d: T) => boolean
+  children: (d: T) => ReactNode
+}) {
   if (query.error) return <ErrorPanel error={query.error} onRetry={() => query.refetch()} />
   if (query.data === undefined) return <div className="gc-skeleton" style={{ height: 140 }} aria-busy="true" aria-label="Loading" />
   if (isEmpty?.(query.data)) return <Empty>{empty ?? 'No records for this project'}</Empty>

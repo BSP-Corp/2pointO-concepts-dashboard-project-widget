@@ -1,0 +1,16 @@
+rate = 0;
+if(li.BOQ != null)
+{
+	boq_for_rate = BOQ[ID == li.BOQ];
+	if(boq_for_rate.count() > 0)
+	{
+		if(boq_for_rate.Accepted_Costing_Lineitem != null)
+		{
+			costingline = Costing_Lineitem[ID == boq_for_rate.Accepted_Costing_Lineitem];
+			if(costingline.count() > 0)
+			{
+				rate = ifnull(costingline.Unit_Price,0);
+			}
+		}
+	}
+}

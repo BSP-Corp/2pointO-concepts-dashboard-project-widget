@@ -1,0 +1,43 @@
+po_no = ifnull(input.Purchase_Order_Books_No,"");
+if(po_no == "")
+{
+	po_no = ifnull(input.PO_No,"");
+}
+ordered_st = Status[Modules.contains("BOQ") && Index_field == 8];
+boq_ids = List();
+for each  r in input.Item_Table
+{
+	if(r.BOQ != null && !boq_ids.contains(r.BOQ))
+	{
+		boq_ids.add(r.BOQ);
+	}
+}
+for each  b in boq_ids
+{
+	boq_rec = BOQ[ID == b];
+	if(boq_rec.count() > 0)
+	{
+		if(ordered_st.count() > 0 && ifnull(boq_rec.Qty_Received,0) == 0)
+		{
+			boq_rec.Status=ordered_st.ID;
+		}
+		po_text = ifnull(boq_rec.PO,"");
+		if(po_no != "" && !po_text.contains(po_no))
+		{
+			if(po_text == "")
+			{
+				po_text = po_no;
+			}
+			else
+			{
+				po_text = po_text + ", " + po_no;
+			}
+			boq_rec.PO=po_text;
+		}
+		boq_rec.PO_Date=input.Date_field;
+		if(input.Delivery_Date != null)
+		{
+			boq_rec.ETA=input.Delivery_Date;
+		}
+	}
+}

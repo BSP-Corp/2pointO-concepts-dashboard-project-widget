@@ -1,0 +1,881 @@
+map Widget.purchase_delivery(string quo_data)
+{
+	response = Map();
+	try
+	{
+		req = quo_data.toMap();
+		action = ifnull(req.get("action"),"").toString();
+		errors = List();
+		if(action == "create")
+		{
+			projText = ifnull(req.get("project_id"),"").toString();
+			projRec = Project[ID == 0];
+			if(projText.isNumber())
+			{
+				projRec = Project[ID == projText.toLong()];
+			}
+			lines = ifnull(req.get("lines"),List());
+			if(projRec.count() == 0)
+			{
+				errors.add("Project not found");
+			}
+			else if(projRec.Client_Name == null)
+			{
+				errors.add("The project has no customer (Project.Client_Name) — the delivery note needs one");
+			}
+			if(lines.size() == 0)
+			{
+				errors.add("Select at least one received line");
+			}
+			challanType = ifnull(req.get("challan_type"),"Others").toString();
+			challanTypes = {"Supply on Approval","Job Work","Others"};
+			if(!challanTypes.contains(challanType))
+			{
+				errors.add("Unknown challan type");
+			}
+			dnDate = zoho.currentdate;
+			if(ifnull(req.get("dn_date"),"").toString() != "")
+			{
+				dnDate = req.get("dn_date").toString().toDate();
+			}
+			countryId = null;
+			poWarehouseId = null;
+			poNumbers = List();
+			dnDivisionValues = {"Audio Visual","Digital Signage","Shared/Overhead"};
+			for each  line in lines
+			{
+				lineText = ifnull(line.get("line_id"),"").toString();
+				quantity = ifnull(line.get("quantity"),"0").toString().toDecimal();
+				checkDivision = ifnull(line.get("division"),"").toString();
+				if(checkDivision != "" && !dnDivisionValues.contains(checkDivision))
+				{
+					errors.add("Reporting tag (Division) must be Audio Visual, Digital Signage or Shared/Overhead");
+				}
+				checkLineRec = PO_Line_Items[ID == 0];
+				if(lineText.isNumber())
+				{
+					checkLineRec = PO_Line_Items[ID == lineText.toLong()];
+				}
+				if(checkLineRec.count() == 0)
+				{
+					errors.add("A line was not found");
+				}
+				else
+				{
+					name = ifnull(checkLineRec.Item_Description,"Line");
+					linePoRec = Purchase_Order[ID == checkLineRec.Purchase_Order];
+					reserved = thisapp.Delivery.Open_Reserved(checkLineRec.ID,0);
+					available = ifnull(checkLineRec.Quantity_Received,0) - ifnull(checkLineRec.Already_Delivered,0) - reserved;
+					if(linePoRec.count() == 0)
+					{
+						errors.add(name + " is not on a purchase order");
+					}
+					else if(linePoRec.Project_reference != projRec.ID)
+					{
+						errors.add(name + " belongs to another project");
+					}
+					else if(checkLineRec.is_PR == true)
+					{
+						errors.add(name + " is a receipt line");
+					}
+					else if(checkLineRec.is_DN == true)
+					{
+						errors.add(name + " is a delivery note line");
+					}
+					else if(quantity <= 0)
+					{
+						errors.add(name + ": quantity must be above 0");
+					}
+					else if(quantity > available)
+					{
+						errors.add(name + ": " + quantity + " is more than the " + available + " received and not yet delivered or on an open delivery note");
+					}
+					else
+					{
+						if(countryId == null)
+						{
+							countryId = linePoRec.Country;
+						}
+						if(poWarehouseId == null && linePoRec.Warehouse != null)
+						{
+							poWarehouseId = linePoRec.Warehouse;
+						}
+						else if(linePoRec.Country != countryId)
+						{
+							errors.add("Lines come from purchase orders of different countries — create one delivery note per country");
+						}
+						linePoNo = ifnull(linePoRec.Purchase_Order_Books_No,"").trim();
+						if(linePoNo == "")
+						{
+							linePoNo = ifnull(linePoRec.PO_No,"");
+						}
+						if(!poNumbers.contains(linePoNo))
+						{
+							poNumbers.add(linePoNo);
+						}
+					}
+				}
+			}
+			customerId = null;
+			sosUae = null;
+			sosSar = null;
+			if(errors.size() == 0)
+			{
+				customerId = projRec.Client_Name;
+			}
+			if(errors.size() == 0 && countryId != null)
+			{
+				countryRec = Country[ID == countryId];
+				idx = ifnull(countryRec.Index_field,0);
+				custRec = Customers[ID == customerId];
+				tt = ifnull(custRec.Tax_Treatment,"").replaceAll("  "," ").trim();
+				emirateTts = {"VAT Registered","Non VAT Registered","VAT Registered - Designated Zone","Non VAT Registered - Designated Zone"};
+				gccTts = {"GCC VAT Registered","GCC Non VAT Registered"};
+				emirateOf = {"abu dhabi":"Abu Dhabi","az":"Abu Dhabi","ab":"Abu Dhabi","ajman":"Ajman","aj":"Ajman","dubai":"Dubai","du":"Dubai","fujairah":"Fujairah","fu":"Fujairah","ras al-khaimah":"Ras al-Khaimah","ras al khaimah":"Ras al-Khaimah","rak":"Ras al-Khaimah","rk":"Ras al-Khaimah","ra":"Ras al-Khaimah","sharjah":"Sharjah","sh":"Sharjah","umm al-quwain":"Umm al-Quwain","umm al quwain":"Umm al-Quwain","uq":"Umm al-Quwain","um":"Umm al-Quwain"};
+				gccOf = {"bahrain":"Bahrain","bh":"Bahrain","kuwait":"Kuwait","kw":"Kuwait","oman":"Oman","om":"Oman","qatar":"Qatar","qa":"Qatar","saudi arabia":"Saudi Arabia","sa":"Saudi Arabia","ksa":"Saudi Arabia","united arab emirates":"United Arab Emirates","uae":"United Arab Emirates","ae":"United Arab Emirates"};
+				posKey = ifnull(custRec.Place_of_Supply,"").trim().toLowerCase();
+				pickKey = ifnull(req.get("source_of_supply"),"").toString().trim().toLowerCase();
+				posEmirate = ifnull(emirateOf.get(posKey),"");
+				posGcc = ifnull(gccOf.get(posKey),"");
+				pickEmirate = ifnull(emirateOf.get(pickKey),"");
+				pickGcc = ifnull(gccOf.get(pickKey),"");
+				if(idx == 1)
+				{
+					if(emirateTts.contains(tt))
+					{
+						if(pickEmirate != "")
+						{
+							sosUae = pickEmirate;
+						}
+						else if(posEmirate != "")
+						{
+							sosUae = posEmirate;
+						}
+						else
+						{
+							errors.add("Select the Source of Supply (emirate): the customer's Place of Supply \"" + ifnull(custRec.Place_of_Supply,"") + "\" is not an emirate");
+						}
+					}
+					else if(gccTts.contains(tt))
+					{
+						if(pickGcc != "")
+						{
+							sosSar = pickGcc;
+						}
+						else if(posGcc != "")
+						{
+							sosSar = posGcc;
+						}
+						if(sosSar == null)
+						{
+							errors.add("Select the Source of Supply (GCC country) for this GCC customer");
+						}
+						else if(sosSar == "United Arab Emirates")
+						{
+							errors.add("A GCC customer cannot have United Arab Emirates as Source of Supply");
+							sosSar = null;
+						}
+					}
+				}
+				else if(idx == 2)
+				{
+					saudiVat = tt == "VAT Registered";
+					if(tt == "Non VAT Registered")
+					{
+						saudiVat = true;
+					}
+					if(saudiVat)
+					{
+						sosSar = "Saudi Arabia";
+					}
+					else if(tt != "Non GCC")
+					{
+						if(pickGcc != "")
+						{
+							sosSar = pickGcc;
+						}
+						else if(posGcc != "")
+						{
+							sosSar = posGcc;
+						}
+						if(tt.contains("Designated Zone"))
+						{
+							errors.add("Designated Zone tax treatment is only for UAE customers — fix the customer's Tax Treatment");
+						}
+						else if(sosSar == null)
+						{
+							errors.add("Select the Source of Supply for this customer");
+						}
+						else if(gccTts.contains(tt) && sosSar == "Saudi Arabia")
+						{
+							errors.add("A GCC customer cannot have Saudi Arabia as Source of Supply");
+						}
+					}
+				}
+			}
+			if(errors.size() > 0)
+			{
+				response = {"status":"error","code":"INVALID","message":errors.toString("; ")};
+			}
+			else
+			{
+				draftStatus = Status[Modules.contains("Delivery Note") && Index_field == 1];
+				draftId = null;
+				if(draftStatus.count() > 0)
+				{
+					draftId = draftStatus.ID;
+				}
+				warehouseText = ifnull(req.get("warehouse_id"),"").toString();
+				warehouseId = null;
+				if(warehouseText.isNumber())
+				{
+					warehouseId = warehouseText.toLong();
+				}
+				if(warehouseId == null)
+				{
+					warehouseId = poWarehouseId;
+				}
+				projectRef = ifnull(projRec.Project_Reference,"").trim();
+				if(projectRef == "")
+				{
+					if(projRec.Accepted_Estimate != null)
+					{
+						refEstRec = Estimate[ID == projRec.Accepted_Estimate];
+						if(refEstRec.count() > 0)
+						{
+							projectRef = ifnull(refEstRec.Project_Reference,"").trim();
+						}
+					}
+				}
+				reference = ifnull(req.get("reference"),"").toString().trim();
+				if(reference == "")
+				{
+					reference = projectRef;
+				}
+				if(reference == "")
+				{
+					reference = poNumbers.toString(", ");
+				}
+				itemRows = List();
+				subTotal = 0;
+				boqIds = List();
+				sourcePrIds = List();
+				for each  line in lines
+				{
+					parentRec = PO_Line_Items[ID == line.get("line_id").toString().toLong()];
+					parentPoRec = Purchase_Order[ID == parentRec.Purchase_Order];
+					quantity = line.get("quantity").toString().toDecimal().round(0).toLong();
+					received = ifnull(parentRec.Quantity_Received,0);
+					delivered = ifnull(parentRec.Already_Delivered,0);
+					available = received - delivered - thisapp.Delivery.Open_Reserved(parentRec.ID,0);
+					sellRate = 0;
+					if(parentRec.BOQ != null)
+					{
+						rateBoqRec = BOQ[ID == parentRec.BOQ];
+						if(rateBoqRec.count() > 0)
+						{
+							if(rateBoqRec.Accepted_Costing_Lineitem != null)
+							{
+								rateCostRec = Costing_Lineitem[ID == rateBoqRec.Accepted_Costing_Lineitem];
+								if(rateCostRec.count() > 0)
+								{
+									sellRate = ifnull(rateCostRec.Unit_Price,0);
+								}
+							}
+						}
+					}
+					amount = (quantity * sellRate).round(2);
+					subTotal = subTotal + amount;
+					rowMap = Map();
+					rowMap.put("Parent_Line_ID",parentRec.ID.toString());
+					rowMap.put("Parent_PO_ID",parentPoRec.ID.toString());
+					sourcePrId = "";
+					latestPrId = "";
+					prCopyIds = List();
+					for each  prCopyRec in PO_Line_Items[Parent_Line_ID == parentRec.ID && is_PR == true] sort by ID
+					{
+						prCopyIds.add(prCopyRec.ID);
+						if(prCopyRec.Purchase_Receive != null)
+						{
+							latestPrId = prCopyRec.Purchase_Receive.toString();
+						}
+					}
+					if(prCopyIds.size() > 0)
+					{
+						for each  stockRec in Storage[PR_Line in prCopyIds && Purchase_Receive != null] sort by ID
+						{
+							stockLeft = ifnull(stockRec.Qty,0) - ifnull(stockRec.Delivered_Qty,0);
+							if(sourcePrId == "" && stockLeft > 0)
+							{
+								sourcePrId = stockRec.Purchase_Receive.toString();
+							}
+						}
+					}
+					if(sourcePrId == "")
+					{
+						sourcePrId = latestPrId;
+					}
+					if(sourcePrId != "")
+					{
+						rowMap.put("Parent_PR_ID",sourcePrId);
+						if(!sourcePrIds.contains(sourcePrId))
+						{
+							sourcePrIds.add(sourcePrId);
+						}
+					}
+					rowMap.put("is_DN",true);
+					rowMap.put("is_PR",false);
+					rowMap.put("Item_Name",parentRec.Item_Name.toString());
+					rowMap.put("Item_Description",ifnull(parentRec.Item_Description,""));
+					rowMap.put("Quantity",ifnull(parentRec.Quantity,0));
+					rowMap.put("Rate",sellRate);
+					if(parentRec.Tax != null)
+					{
+						rowMap.put("Tax",parentRec.Tax.toString());
+					}
+					if(parentRec.Discount != null)
+					{
+						rowMap.put("Discount",parentRec.Discount);
+					}
+					if(parentRec.BOQ != null)
+					{
+						rowMap.put("BOQ",parentRec.BOQ.toString());
+						if(!boqIds.contains(parentRec.BOQ))
+						{
+							boqIds.add(parentRec.BOQ);
+						}
+					}
+					wpText = "";
+					if(parentRec.Estimate_Line_ID != null)
+					{
+						rowMap.put("Estimate_Line_ID",parentRec.Estimate_Line_ID.toString());
+						costLineRec = Costing_Lineitem[ID == parentRec.Estimate_Line_ID];
+						if(costLineRec.count() > 0)
+						{
+							wpText = ifnull(costLineRec.Work_Package,"").toString();
+						}
+					}
+					rowMap.put("WP_ID",wpText);
+					rowMap.put("Quantity_Received",received);
+					rowMap.put("Already_Delivered",delivered);
+					rowMap.put("Available_Qty",available);
+					rowMap.put("Qty_to_Deliver",quantity);
+					rowMap.put("DN_Amount",amount);
+					rowDivision = ifnull(line.get("division"),"").toString();
+					if(rowDivision == "")
+					{
+						rowDivision = ifnull(parentRec.Division,"");
+					}
+					if(rowDivision != "")
+					{
+						rowMap.put("Division",rowDivision);
+					}
+					itemRows.add(rowMap);
+				}
+				dnNo = thisapp.Creator.AutoGenerateNo("Delivery Challan");
+				apiBase = "https://www.zohoapis.com/creator/v2.1/data/2point0concepts/point0concepts";
+				apiHeaders = Map();
+				apiHeaders.put("environment","development");
+				dnData = Map();
+				dnData.put("DN_No",dnNo);
+				dnData.put("DN_Date",dnDate.toString("dd-MMM-yyyy"));
+				dnData.put("Customer",customerId.toString());
+				dnData.put("Project",projRec.ID.toString());
+				if(countryId != null)
+				{
+					dnData.put("Country",countryId.toString());
+				}
+				if(sosUae != null)
+				{
+					dnData.put("Source_of_Supply_UAE",sosUae);
+				}
+				if(sosSar != null)
+				{
+					dnData.put("Source_of_Supply_SAR",sosSar);
+				}
+				if(warehouseId != null)
+				{
+					dnData.put("Warehouse",warehouseId.toString());
+				}
+				dnData.put("Reference",reference);
+				if(projectRef != "")
+				{
+					dnData.put("Project_Reference",projectRef);
+				}
+				dnData.put("Challan_Type",challanType);
+				dnData.put("Tax_Type","Tax Inclusive");
+				if(draftId != null)
+				{
+					dnData.put("Status",draftId.toString());
+				}
+				dnData.put("Customer_Notes",ifnull(req.get("notes"),"").toString());
+				dnData.put("Sub_Total",subTotal.round(2));
+				dnData.put("Total",subTotal.round(2));
+				dnData.put("Item_Table",itemRows);
+				bodyMap = Map();
+				bodyMap.put("data",dnData);
+				apiResp = invokeurl
+				[
+					url :apiBase + "/form/Delivery_Note"
+					type :POST
+					parameters:bodyMap.toString()
+					headers:apiHeaders
+					connection:"zoho_creator"
+				];
+				dnId = 0;
+				apiError = "";
+				if(ifnull(apiResp.get("code"),"").toString() == "3000")
+				{
+					apiData = apiResp.get("data");
+					dnId = apiData.get("ID").toString().toLong();
+				}
+				else
+				{
+					apiError = ifnull(apiResp.get("error"),"").toString();
+					if(apiError == "")
+					{
+						apiError = ifnull(apiResp.get("message"),"").toString();
+					}
+					if(apiError == "")
+					{
+						apiError = apiResp.toString();
+					}
+				}
+				if(dnId == 0)
+				{
+					response = {"status":"error","code":"API","message":"Creator did not save the delivery note: " + apiError};
+				}
+				else
+				{
+					for each  boqId in boqIds
+					{
+						boqRec = BOQ[ID == boqId];
+						if(boqRec.count() > 0)
+						{
+							dnList = List();
+							if(boqRec.Delivery_Note != null)
+							{
+								dnList.addAll(boqRec.Delivery_Note);
+							}
+							if(!dnList.contains(dnId))
+							{
+								dnList.add(dnId);
+								boqRec.Delivery_Note=dnList;
+							}
+						}
+						thisapp.Delivery.Recalc_BOQ(boqId);
+					}
+					for each  sourcePrText in sourcePrIds
+					{
+						if(sourcePrText.isNumber())
+						{
+							sourcePrRec = Purchase_Receive[ID == sourcePrText.toLong()];
+							if(sourcePrRec.count() > 0)
+							{
+								if(sourcePrRec.Delivery_Note == null)
+								{
+									sourcePrRec.Delivery_Note=dnId;
+								}
+							}
+						}
+					}
+					savedDnRec = Delivery_Note[ID == dnId];
+					linked = PO_Line_Items[Delivery_Note == dnId].count();
+					response = {"status":"success","id":dnId.toString(),"DN_No":ifnull(savedDnRec.DN_No,dnNo),"Lines":linked};
+				}
+			}
+		}
+		else if(action == "print")
+		{
+			printText = ifnull(req.get("dn_id"),"").toString();
+			printDnRec = Delivery_Note[ID == 0];
+			if(printText.isNumber())
+			{
+				printDnRec = Delivery_Note[ID == printText.toLong()];
+			}
+			if(printDnRec.count() == 0)
+			{
+				response = {"status":"error","code":"NOT_FOUND","message":"Delivery note not found"};
+			}
+			else
+			{
+				org = Map();
+				orgLines = List();
+				if(printDnRec.Country != null)
+				{
+					printCountry = Country[ID == printDnRec.Country];
+					orgId = ifnull(printCountry.Books_Org_ID,"").toString();
+					if(orgId != "")
+					{
+						orgResp = invokeurl
+						[
+							url :"https://www.zohoapis.com/books/v3/organizations/" + orgId
+							type :GET
+							connection:"zbooks1"
+						];
+						if(ifnull(orgResp.get("code"),"").toString() == "0")
+						{
+							orgData = orgResp.get("organization");
+							org.put("Name",ifnull(orgData.get("name"),"").toString());
+							org.put("Phone",ifnull(orgData.get("phone"),"").toString());
+							org.put("Email",ifnull(orgData.get("email"),"").toString());
+							org.put("Website",ifnull(orgData.get("website"),"").toString());
+							org.put("Tax_Label",ifnull(orgData.get("tax_id_label"),"").toString());
+							org.put("Tax_Value",ifnull(orgData.get("tax_id_value"),"").toString());
+							orgAddress = orgData.get("address");
+							if(orgAddress != null)
+							{
+								orgStreet1 = ifnull(orgAddress.get("street_address1"),"").toString().trim();
+								orgStreet2 = ifnull(orgAddress.get("street_address2"),"").toString().trim();
+								if(orgStreet1 != "")
+								{
+									orgLines.add(orgStreet1);
+								}
+								if(orgStreet2 != "")
+								{
+									orgLines.add(orgStreet2);
+								}
+								orgCity = List();
+								for each  orgCityPart in {ifnull(orgAddress.get("city"),"").toString().trim(),ifnull(orgAddress.get("state"),"").toString().trim(),ifnull(orgAddress.get("zip"),"").toString().trim()}
+								{
+									if(orgCityPart != "")
+									{
+										orgCity.add(orgCityPart);
+									}
+								}
+								if(orgCity.size() > 0)
+								{
+									orgLines.add(orgCity.toString(", "));
+								}
+								orgCountryName = ifnull(orgAddress.get("country"),"").toString().trim();
+								if(orgCountryName != "")
+								{
+									orgLines.add(orgCountryName);
+								}
+							}
+						}
+						else
+						{
+							thisapp.Creator.log_addition(zoho.loginuser,"Widget.purchase_delivery","GET Books organization " + orgId,orgResp.toString(),printDnRec.ID.toString(),"");
+						}
+					}
+				}
+				org.put("Address",orgLines);
+				cust = Map();
+				if(printDnRec.Customer != null)
+				{
+					printCustRec = Customers[ID == printDnRec.Customer];
+					if(printCustRec.count() > 0)
+					{
+						billLines = List();
+						if(printCustRec.Billing_Address2 != null)
+						{
+							for each  billPart in {ifnull(printCustRec.Billing_Address2.address_line_1,""),ifnull(printCustRec.Billing_Address2.address_line_2,""),ifnull(printCustRec.Billing_Address2.district_city,""),ifnull(printCustRec.Billing_Address2.state_province,""),ifnull(printCustRec.Billing_Address2.postal_Code,""),ifnull(printCustRec.Billing_Address2.country,"")}
+							{
+								if(billPart.trim() != "")
+								{
+									billLines.add(billPart.trim());
+								}
+							}
+						}
+						shipLines = List();
+						if(printCustRec.Shipping_Address != null)
+						{
+							for each  shipPart in {ifnull(printCustRec.Shipping_Address.address_line_1,""),ifnull(printCustRec.Shipping_Address.address_line_2,""),ifnull(printCustRec.Shipping_Address.district_city,""),ifnull(printCustRec.Shipping_Address.state_province,""),ifnull(printCustRec.Shipping_Address.postal_Code,""),ifnull(printCustRec.Shipping_Address.country,"")}
+							{
+								if(shipPart.trim() != "")
+								{
+									shipLines.add(shipPart.trim());
+								}
+							}
+						}
+						cust = {"Name":ifnull(printCustRec.Customer_Name,""),"Attention":ifnull(printCustRec.Billing_Attention,""),"Address":billLines,"Ship_Attention":ifnull(printCustRec.Shipping_Attention,""),"Ship_Address":shipLines,"TRN":ifnull(printCustRec.Tax_Registration_Number_TRN,""),"Phone":ifnull(printCustRec.Phone_Number,""),"Mobile":ifnull(printCustRec.Mobile,""),"Email":ifnull(printCustRec.Email,"")};
+					}
+				}
+				response = {"status":"success","Organization":org,"Customer":cust,"Project_Reference":ifnull(printDnRec.Project_Reference,"")};
+			}
+		}
+		else if(action == "status")
+		{
+			dnText = ifnull(req.get("dn_id"),"").toString();
+			dnRec = Delivery_Note[ID == 0];
+			if(dnText.isNumber())
+			{
+				dnRec = Delivery_Note[ID == dnText.toLong()];
+			}
+			targetText = ifnull(req.get("status_index"),"").toString();
+			currentIndex = 1;
+			if(dnRec.count() == 0)
+			{
+				errors.add("Delivery note not found");
+			}
+			else if(dnRec.Status != null)
+			{
+				currentIndex = dnRec.Status.Index_field;
+			}
+			targetStatus = Status[ID == 0];
+			if(targetText.isNumber())
+			{
+				targetStatus = Status[Modules.contains("Delivery Note") && Index_field == targetText.toLong()];
+			}
+			if(targetStatus.count() == 0)
+			{
+				errors.add("Unknown delivery note status");
+			}
+			targetIndex = 0;
+			if(targetText.isNumber())
+			{
+				targetIndex = targetText.toLong();
+			}
+			deliveredDate = zoho.currentdate;
+			if(ifnull(req.get("delivered_date"),"").toString() != "")
+			{
+				deliveredDate = req.get("delivered_date").toString().toDate();
+			}
+			receivedBy = ifnull(req.get("received_by"),"").toString().trim();
+			if(dnRec.count() > 0)
+			{
+				if(currentIndex == 48)
+				{
+					if(targetIndex != 48)
+					{
+						reopenLines = 0;
+						for each  reopenRec in PO_Line_Items[Delivery_Note == dnRec.ID]
+						{
+							reopenLines = reopenLines + 1;
+							if(reopenRec.Parent_Line_ID != null)
+							{
+								reopenParent = PO_Line_Items[ID == reopenRec.Parent_Line_ID];
+								if(reopenParent.count() > 0)
+								{
+									reopenFree = ifnull(reopenParent.Quantity_Received,0) - ifnull(reopenParent.Already_Delivered,0) - thisapp.Delivery.Open_Reserved(reopenParent.ID,dnRec.ID);
+									if(ifnull(reopenRec.Qty_to_Deliver,0) > reopenFree)
+									{
+										errors.add(ifnull(reopenRec.Item_Description,"Line") + ": only " + reopenFree + " in stock now — this note needs " + ifnull(reopenRec.Qty_to_Deliver,0));
+									}
+								}
+							}
+						}
+						if(reopenLines == 0)
+						{
+							errors.add("This cancelled note has no lines left — create a new delivery note");
+						}
+					}
+				}
+			}
+			if(targetIndex == 67)
+			{
+				if(receivedBy == "")
+				{
+					errors.add("Enter who received the goods");
+				}
+				if(deliveredDate > zoho.currentdate)
+				{
+					errors.add("Delivered date cannot be in the future");
+				}
+			}
+			if(errors.size() > 0)
+			{
+				response = {"status":"error","code":"INVALID","message":errors.toString("; ")};
+			}
+			else
+			{
+				dnRec.Status=targetStatus.ID;
+				if(ifnull(req.get("vehicle_no"),"").toString() != "")
+				{
+					dnRec.Vehicle_No=req.get("vehicle_no").toString();
+				}
+				if(ifnull(req.get("driver_name"),"").toString() != "")
+				{
+					dnRec.Driver_Name=req.get("driver_name").toString();
+				}
+				if(targetIndex == 67)
+				{
+					dnRec.Delivered_Date=deliveredDate;
+					dnRec.Received_By=receivedBy;
+				}
+				parentIds = List();
+				boqIds = List();
+				for each  dnItemRec in PO_Line_Items[Delivery_Note == dnRec.ID]
+				{
+					if(dnItemRec.Parent_Line_ID != null)
+					{
+						if(!parentIds.contains(dnItemRec.Parent_Line_ID))
+						{
+							parentIds.add(dnItemRec.Parent_Line_ID);
+						}
+					}
+					else
+					{
+						if(currentIndex == 67)
+						{
+							if(targetIndex != 67)
+							{
+								dnItemRec.Already_Delivered=ifnull(dnItemRec.Already_Delivered,0) - ifnull(dnItemRec.Qty_to_Deliver,0);
+								dnItemRec.Available_Qty=ifnull(dnItemRec.Quantity_Received,0) - dnItemRec.Already_Delivered;
+							}
+						}
+						else if(targetIndex == 67)
+						{
+							dnItemRec.Already_Delivered=ifnull(dnItemRec.Already_Delivered,0) + ifnull(dnItemRec.Qty_to_Deliver,0);
+							dnItemRec.Available_Qty=ifnull(dnItemRec.Quantity_Received,0) - dnItemRec.Already_Delivered;
+						}
+						if(targetIndex == 48)
+						{
+							dnItemRec.Delivery_Note=null;
+							dnItemRec.Qty_to_Deliver=0;
+							dnItemRec.DN_Amount=0;
+						}
+					}
+					if(dnItemRec.BOQ != null && !boqIds.contains(dnItemRec.BOQ))
+					{
+						boqIds.add(dnItemRec.BOQ);
+					}
+				}
+				for each  parentId in parentIds
+				{
+					thisapp.Delivery.Recalc_Parent_Delivered(parentId);
+				}
+				for each  boqId in boqIds
+				{
+					boqRec = BOQ[ID == boqId];
+					if(boqRec.count() > 0)
+					{
+						dnList = List();
+						if(boqRec.Delivery_Note != null)
+						{
+							for each  listedDnId in boqRec.Delivery_Note
+							{
+								if(listedDnId != dnRec.ID || targetIndex != 48)
+								{
+									dnList.add(listedDnId);
+								}
+							}
+						}
+						if(targetIndex != 48 && !dnList.contains(dnRec.ID))
+						{
+							dnList.add(dnRec.ID);
+						}
+						boqRec.Delivery_Note=dnList;
+						if(targetIndex == 67)
+						{
+							boqRec.Delivered_Date=deliveredDate;
+						}
+					}
+					thisapp.Delivery.Recalc_BOQ(boqId);
+				}
+				if(targetIndex == 67)
+				{
+					thisapp.Delivery.On_Delivered(dnRec.ID);
+				}
+				booksId = "";
+				if(targetIndex != 48)
+				{
+					thisapp.ZohoBooks.Delivery_Challan_Creator_books_Sync(dnRec.ID);
+					syncedDnRec = Delivery_Note[ID == dnRec.ID];
+					booksId = ifnull(syncedDnRec.UAE_ZB_ID,"");
+					if(booksId == "")
+					{
+						booksId = ifnull(syncedDnRec.SAR_ZB_ID,"");
+					}
+				}
+				response = {"status":"success","id":dnRec.ID.toString(),"DN_No":ifnull(dnRec.DN_No,""),"Status":targetStatus.Status_Name,"Books_Synced":booksId != "","Books_ID":booksId};
+			}
+		}
+		else if(action == "books_sync")
+		{
+			syncKind = ifnull(req.get("kind"),"").toString();
+			syncText = ifnull(req.get("id"),"").toString();
+			syncBooksId = "";
+			syncNo = "";
+			if(!syncText.isNumber())
+			{
+				errors.add("Record not found");
+			}
+			else if(syncKind == "po")
+			{
+				syncPoRec = Purchase_Order[ID == syncText.toLong()];
+				if(syncPoRec.count() == 0)
+				{
+					errors.add("Purchase order not found");
+				}
+				else
+				{
+					thisapp.ZohoBooks.Purchase_Order_Creator_books_Sync(syncPoRec.ID);
+					syncPoAfter = Purchase_Order[ID == syncPoRec.ID];
+					syncBooksId = ifnull(syncPoAfter.UAE_ZB_ID,"");
+					if(syncBooksId == "")
+					{
+						syncBooksId = ifnull(syncPoAfter.SAR_ZB_ID,"");
+					}
+					syncNo = ifnull(syncPoAfter.Purchase_Order_Books_No,"").trim();
+					if(syncNo == "")
+					{
+						syncNo = ifnull(syncPoAfter.PO_No,"");
+					}
+				}
+			}
+			else if(syncKind == "pr")
+			{
+				syncPrRec = Purchase_Receive[ID == syncText.toLong()];
+				if(syncPrRec.count() == 0)
+				{
+					errors.add("Purchase receive not found");
+				}
+				else
+				{
+					syncPrPo = Purchase_Order[ID == syncPrRec.Purchase_Order];
+					syncPoBooks = "";
+					if(syncPrPo.count() > 0)
+					{
+						syncPoBooks = ifnull(syncPrPo.UAE_ZB_ID,"");
+						if(syncPoBooks == "")
+						{
+							syncPoBooks = ifnull(syncPrPo.SAR_ZB_ID,"");
+						}
+					}
+					if(syncPoBooks == "")
+					{
+						errors.add("The purchase order is not in Zoho Books yet — retry the purchase order first");
+					}
+					else
+					{
+						thisapp.ZohoBooks.Purchase_Receive_Creator_books_Sync(syncPrRec.ID);
+						syncPrAfter = Purchase_Receive[ID == syncPrRec.ID];
+						syncBooksId = ifnull(syncPrAfter.UAE_ZB_ID,"");
+						if(syncBooksId == "")
+						{
+							syncBooksId = ifnull(syncPrAfter.SAR_ZB_ID,"");
+						}
+						syncNo = ifnull(syncPrAfter.Purchase_Receive_Books_No,"").trim();
+						if(syncNo == "")
+						{
+							syncNo = ifnull(syncPrAfter.PR_No,"");
+						}
+					}
+				}
+			}
+			else
+			{
+				errors.add("Unknown record type");
+			}
+			if(errors.size() > 0)
+			{
+				response = {"status":"error","code":"INVALID","message":errors.toString("; ")};
+			}
+			else
+			{
+				response = {"status":"success","id":syncText,"No":syncNo,"Books_Synced":syncBooksId != "","Books_ID":syncBooksId};
+			}
+		}
+		else
+		{
+			response = {"status":"error","code":"INVALID","message":"Unknown action: " + action};
+		}
+	}
+	catch (e)
+	{
+		response = {"status":"error","code":"EXCEPTION","message":e.toString()};
+	}
+	return response;
+}

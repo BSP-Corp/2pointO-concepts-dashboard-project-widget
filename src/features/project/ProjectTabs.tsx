@@ -1,18 +1,17 @@
-import { useRef, type KeyboardEvent } from 'react'
+import { useRef, type KeyboardEvent, useLayoutEffect } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import type { Nav } from '@/features/console/ConsoleApp'
 import { CountBadge } from '@/features/console/ui'
 import type { useProcurement } from '@/features/projects/api'
 import type { CostingLine, PaymentMilestone, PlanMilestone, Project, ProjectDetails, Risk, WorkTask } from '@/types/domain'
 import type { BoqRow, MilestoneRow } from './model'
-import { workTasks } from './model'
 import { ActivityTab } from './tabs/ActivityTab'
 import { AssetsTab } from './tabs/AssetsTab'
 import { BoqTab } from './tabs/BoqTab'
 import { MilestonesTab } from './tabs/MilestonesTab'
 import { OverviewTab } from './tabs/OverviewTab'
-import { RiskDashboardTab, RiskRegisterTab } from './tabs/RisksTab'
-import { TasksTab } from './tabs/TasksTab'
+import { ExecutionTab } from './tabs/ExecutionTab'
+import { RisksTab } from './tabs/RisksTab'
 
 export interface TabContext {
   project: Project
@@ -35,19 +34,25 @@ export interface TabContext {
 
 const TABS = [
   { id: 'overview', label: 'Overview', count: () => undefined, Component: OverviewTab },
-  { id: 'boq', label: 'Procurement', count: (c: TabContext) => c.queries.procurement.boq.data?.length, Component: BoqTab },
-  { id: 'assets', label: 'Asset Register', count: (c: TabContext) => c.queries.lines.data?.length, Component: AssetsTab },
   { id: 'milestones', label: 'Milestones', count: (c: TabContext) => c.milestones?.length, Component: MilestonesTab },
-  { id: 'tasks', label: 'Tasks', count: (c: TabContext) => (c.queries.tasks.data ? workTasks(c.queries.tasks.data).length : undefined), Component: TasksTab },
-  { id: 'risks', label: 'Risk Register', count: (c: TabContext) => c.queries.risks.data?.length, Component: RiskRegisterTab },
-  { id: 'risk-dashboard', label: 'Risk Dashboard', count: () => undefined, Component: RiskDashboardTab },
+  {
+    id: 'execution',
+    label: 'Execution',
+    count: (c: TabContext) => (c.queries.lines.data ? new Set(c.queries.lines.data.map((l) => l.workPackage || 'General')).size : undefined),
+    Component: ExecutionTab,
+  },
+  { id: 'boq', label: 'Procurement', count: (c: TabContext) => c.queries.procurement.boq.data?.length, Component: BoqTab },
+  { id: 'risks', label: 'Risks', count: (c: TabContext) => c.queries.risks.data?.length, Component: RisksTab },
+  { id: 'assets', label: 'Asset Register', count: (c: TabContext) => c.queries.lines.data?.length, Component: AssetsTab },
   { id: 'activity', label: 'Activity', count: () => undefined, Component: ActivityTab },
 ] as const
 
-/** Overview, Procurement (BOQ), Asset Register, Milestones, Tasks, Risk Register, Risk Dashboard, Activity — one Project ID; the header never reloads on a switch. */
+/** Overview · Milestones · Execution (work packages → lines and tasks) · Procurement (read-only) · Risks · Asset Register · Activity (PPT 27 Oct 2026). */
 export function ProjectTabs({ tab, ...ctx }: Omit<TabContext, 'onTab'> & { tab: string; onTab: (t: string) => void }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([])
-  const active = TABS.find((t) => t.id === tab) ?? TABS[0]
+  // Tabs merged in the PPT revision: Tasks → Execution, Risk Register / Dashboard → Risks
+  const id = tab === 'tasks' ? 'execution' : tab === 'risk-dashboard' ? 'risks' : tab
+  const active = TABS.find((t) => t.id === id) ?? TABS[0]
   const c: TabContext = ctx
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const i = TABS.findIndex((t) => t.id === active.id)
@@ -58,6 +63,17 @@ export function ProjectTabs({ tab, ...ctx }: Omit<TabContext, 'onTab'> & { tab: 
     ctx.onTab(TABS[j].id)
     refs.current[j]?.focus()
   }
+  // The tab row stays pinned under the sticky project header while the page scrolls
+  useLayoutEffect(() => {
+    const head = document.querySelector<HTMLElement>('.gc-apphead-wrap')
+    if (!head) return
+    // header height + its own sticky top (it sticks a little above 0)
+    const set = () => document.documentElement.style.setProperty('--gc-head-h', `${head.getBoundingClientRect().height + (parseFloat(getComputedStyle(head).top) || 0)}px`)
+    set()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(set) : null
+    ro?.observe(head)
+    return () => ro?.disconnect()
+  }, [])
   return (
     <section className="gc-panel gc-panel--flush gc-tabs-card" aria-label="Project modules">
       <div role="tablist" aria-label="Project modules" className="gc-tabs" onKeyDown={onKeyDown}>

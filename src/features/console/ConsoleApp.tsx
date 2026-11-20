@@ -5,6 +5,9 @@ import { useTheme } from '@/lib/theme'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { ProcurementPage } from '@/features/procurement/ProcurementPage'
 import { ProjectPage } from '@/features/project/ProjectPage'
+import { ErrorBoundary } from './ErrorBoundary'
+import { FilePreview } from './FilePreview'
+import { SelectPopup } from './SelectPopup'
 import { Toaster } from './toast'
 import { ThemeContext } from './TopBar'
 import './console.css'
@@ -17,6 +20,8 @@ export interface Nav {
   procurement: (id: string) => void
   /** An estimate without an approved project opens in the Cost Analysis widget only. */
   costAnalysis: (estimateId: string) => void
+  /** A cost analysis just created for a deal (as Estimate.Create_Quotation opens it) */
+  newCostAnalysis: (estimateId: string) => void
 }
 
 /**
@@ -49,23 +54,28 @@ export function ConsoleApp() {
     project: (id) => ds.navigate(`#Page:${PAGES.project}?${PAGES.projectParam}=${encodeURIComponent(id)}`),
     procurement: (id) => ds.navigate(`#Page:${PAGES.procurement}?${PAGES.procurementParam}=${encodeURIComponent(id)}`),
     costAnalysis: (estimateId) => ds.navigate(`#Page:${COST_ANALYSIS_PAGE.name}?quo_id=${encodeURIComponent(estimateId)}&act_ion=create`),
+    newCostAnalysis: (estimateId) => ds.navigate(`#Page:${COST_ANALYSIS_PAGE.name}?quo_id=${encodeURIComponent(estimateId)}&act_ion=update`),
   }
 
   return (
     <ThemeContext.Provider value={{ theme, toggle: toggleTheme }}>
       <div className="gc-app">
-        {!route ? (
-          <div className="gc-main">
-            <div className="gc-skeleton" style={{ height: 280 }} aria-busy="true" aria-label="Loading" />
-          </div>
-        ) : route.page === 'home' ? (
-          <DashboardPage nav={nav} />
-        ) : route.page === 'project' ? (
-          <ProjectPage key={route.projectId} projectId={route.projectId} nav={nav} />
-        ) : (
-          <ProcurementPage key={route.projectId} projectId={route.projectId} nav={nav} />
-        )}
+        <ErrorBoundary key={route ? `${route.page}-${'projectId' in route ? route.projectId : ''}` : 'loading'}>
+          {!route ? (
+            <div className="gc-main">
+              <div className="gc-skeleton" style={{ height: 280 }} aria-busy="true" aria-label="Loading" />
+            </div>
+          ) : route.page === 'home' ? (
+            <DashboardPage nav={nav} />
+          ) : route.page === 'project' ? (
+            <ProjectPage key={route.projectId} projectId={route.projectId} nav={nav} />
+          ) : (
+            <ProcurementPage key={route.projectId} projectId={route.projectId} nav={nav} />
+          )}
+        </ErrorBoundary>
         <Toaster />
+        <SelectPopup />
+        <FilePreview />
       </div>
     </ThemeContext.Provider>
   )

@@ -1,0 +1,136 @@
+string Bulk_Update.Remove_Duplicate_Project_Tasks(int proj_id, bool apply)
+{
+	nameOf = Map();
+	parentOf = Map();
+	typeOf = Map();
+	msOf = Map();
+	taskOrder = List();
+	for each  dupTaskRec in Task[Project_Name == proj_id] sort by ID
+	{
+		dupTid = dupTaskRec.ID.toString();
+		taskOrder.add(dupTid);
+		nameOf.put(dupTid,ifnull(dupTaskRec.Task_Name,"").trim().toLowerCase());
+		dupParent = "";
+		if(dupTaskRec.Parent_Task != null)
+		{
+			dupParent = dupTaskRec.Parent_Task.toString();
+		}
+		parentOf.put(dupTid,dupParent);
+		typeOf.put(dupTid,ifnull(dupTaskRec.Type_field,""));
+		dupMs = "";
+		if(dupTaskRec.Milestone != null)
+		{
+			dupMs = dupTaskRec.Milestone.toString();
+		}
+		msOf.put(dupTid,dupMs);
+	}
+	keepByKey = Map();
+	keptCommon = List();
+	dupByDepth = Map();
+	dupCount = 0;
+	for each  pathTid in taskOrder
+	{
+		pathKey = nameOf.get(pathTid);
+		walkId = pathTid;
+		pathDepth = 1;
+		for each  walkStep in {1,2,3,4,5,6,7,8}
+		{
+			walkParent = parentOf.get(walkId);
+			if(walkParent != "")
+			{
+				if(nameOf.containKey(walkParent))
+				{
+					pathKey = nameOf.get(walkParent) + " > " + pathKey;
+					walkId = walkParent;
+					pathDepth = pathDepth + 1;
+				}
+			}
+		}
+		if(typeOf.get(walkId) != "Work Package")
+		{
+			dupKey = msOf.get(pathTid) + "|" + pathKey;
+			if(keepByKey.containKey(dupKey))
+			{
+				depthList = List();
+				if(dupByDepth.containKey(pathDepth.toString()))
+				{
+					depthList = dupByDepth.get(pathDepth.toString());
+				}
+				depthList.add(pathTid);
+				dupByDepth.put(pathDepth.toString(),depthList);
+				dupCount = dupCount + 1;
+			}
+			else
+			{
+				keepByKey.put(dupKey,pathTid);
+				keptCommon.add(pathTid);
+			}
+		}
+	}
+	deleted = 0;
+	skipped = List();
+	if(apply)
+	{
+		for each  delDepth in {8,7,6,5,4,3,2,1}
+		{
+			for each  delTid in ifnull(dupByDepth.get(delDepth.toString()),List())
+			{
+				delRec = Task[ID == delTid.toLong()];
+				untouched = true;
+				if(ifnull(delRec.Precent_Complete,0) > 0)
+				{
+					untouched = false;
+				}
+				if(delRec.Actual_Start_Date != null)
+				{
+					untouched = false;
+				}
+				if(delRec.Actual_Complete_Date != null)
+				{
+					untouched = false;
+				}
+				if(Task_Note[Task == delRec.ID].count() > 0)
+				{
+					untouched = false;
+				}
+				if(Task_File[Task == delRec.ID].count() > 0)
+				{
+					untouched = false;
+				}
+				if(Task[Parent_Task == delRec.ID].count() > 0)
+				{
+					untouched = false;
+				}
+				if(untouched)
+				{
+					delete from Task[ID == delRec.ID];
+					deleted = deleted + 1;
+				}
+				else
+				{
+					skipped.add(ifnull(delRec.Task_Name,"") + " (" + delTid + ")");
+				}
+			}
+		}
+		for each  keepTid in keptCommon
+		{
+			keepRec = Task[ID == keepTid.toLong()];
+			if(keepRec.count() > 0)
+			{
+				keepRec.Work_Package="";
+				keepRec.Work_Packages=List();
+			}
+		}
+	}
+	summary = "Duplicate copies found: " + dupCount + ". Deleted: " + deleted + ".";
+	if(skipped.size() > 0)
+	{
+		summary = summary + " Kept (they have progress, notes, files or sub-tasks): " + skipped.toString(", ");
+	}
+	if(!apply)
+	{
+		summary = summary + " Dry run: nothing changed. Run again with apply = true to delete them.";
+	}
+	info summary;
+	return summary;
+}

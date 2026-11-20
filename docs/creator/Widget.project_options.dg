@@ -1,5 +1,3 @@
-// Widget.project_options(string quo_data) — dropdown values. Custom API: Widget_Project_Options (GET, quo_data).
-// quo_data: {"source":"customers|statuses|countries|currencies|users|estimates|taskList|taskStatuses|installStatuses|boqStatuses|milestoneStatuses|projectStatuses|riskStatuses|departments|taskListTemplates|vendors|warehouses|taxes"} → {"status":"success","records":[{"ID","label"}]}
 map Widget.project_options(string quo_data)
 {
 	response = Map();
@@ -44,18 +42,22 @@ map Widget.project_options(string quo_data)
 		}
 		else if(source == "estimates")
 		{
-			// same rule as the Estimate_Accepted report: Status Index 3 and latest version
 			acceptedIds = Status[Index_field == 3].ID.getAll();
 			for each  estRec in Estimate[Status in acceptedIds && Latest_version == true] sort by Quote_No
 			{
-				rows.add({"ID":estRec.ID.toString(),"label":ifnull(estRec.Quote_No,"")});
+				estLabel = ifnull(estRec.Quote_No_Books,"").trim();
+				if(estLabel == "")
+				{
+					estLabel = ifnull(estRec.Quote_No,"");
+				}
+				rows.add({"ID":estRec.ID.toString(),"label":estLabel});
 			}
 		}
 		else if(source == "taskList")
 		{
-			for each  taskRec in Administration_Milestone_project_Template[ID != 0] sort by Task_Name
+			for each  regItemRec in Project_Registration_Task_List[ID != 0] sort by Added_Time
 			{
-				rows.add({"ID":taskRec.ID.toString(),"label":ifnull(taskRec.Task_Name,"")});
+				rows.add({"ID":regItemRec.ID.toString(),"label":ifnull(regItemRec.Task_Name,""),"active":ifnull(regItemRec.Status,"") == "Active"});
 			}
 		}
 		else if(source == "taskStatuses")
@@ -74,17 +76,113 @@ map Widget.project_options(string quo_data)
 		}
 		else if(source == "vendors")
 		{
-			for each  vendorRec in Vendors[ID != 0] sort by Vendor_Name
+			vendorPages = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49};
+			vendorMore = true;
+			for each  vendorPage in vendorPages
 			{
-				rows.add({"ID":vendorRec.ID.toString(),"label":ifnull(vendorRec.Vendor_Name,""),"email":ifnull(vendorRec.Email,""),"phone":ifnull(vendorRec.Phone_Number,"")});
+				if(vendorMore == true)
+				{
+					vendorFrom = vendorPage * 200 + 1;
+					vendorTo = vendorFrom + 199;
+					vendorBatch = Vendors[ID != 0] sort by ID range from vendorFrom to vendorTo;
+					vendorCount = 0;
+					for each  vendorRec in vendorBatch
+					{
+						vendorCount = vendorCount + 1;
+						rows.add({"ID":vendorRec.ID.toString(),"label":ifnull(vendorRec.Vendor_Name,""),"email":ifnull(vendorRec.Email,""),"phone":ifnull(vendorRec.Phone_Number,""),"division":ifnull(vendorRec.Division,"")});
+					}
+					if(vendorCount < 200)
+					{
+						vendorMore = false;
+					}
+				}
 			}
 		}
-		// Ship-to of a purchase order (Purchase_Order.Warehouse)
 		else if(source == "warehouses")
 		{
 			for each  warehouseRec in Warehouse[ID != 0] sort by Warehouse_Name
 			{
-				rows.add({"ID":warehouseRec.ID.toString(),"label":ifnull(warehouseRec.Warehouse_Name,"")});
+				rows.add({"ID":warehouseRec.ID.toString(),"label":ifnull(warehouseRec.Warehouse_Name,""),"code":ifnull(warehouseRec.Warehouse_Code,""),"type":ifnull(warehouseRec.Warehouse_Type,""),"active":ifnull(warehouseRec.Active,false)});
+			}
+		}
+		else if(source == "racks")
+		{
+			for each  rackRec in Warehouse_Racks[ID != 0] sort by Rack_Code
+			{
+				if(rackRec.Active != false)
+				{
+					parentId = "";
+					if(rackRec.Warehouse != null)
+					{
+						parentId = rackRec.Warehouse.toString();
+					}
+					else
+					{
+						for each  rackBayRec in Bay[Rack == rackRec.ID] sort by ID
+						{
+							if(parentId == "")
+							{
+								if(rackBayRec.Warehouse != null)
+								{
+									parentId = rackBayRec.Warehouse.toString();
+								}
+							}
+						}
+					}
+					rackLabel = ifnull(rackRec.Rack_Code,"").trim();
+					if(rackLabel == "")
+					{
+						rackLabel = ifnull(rackRec.Rack_Aisle,"").trim();
+					}
+					if(rackLabel == "")
+					{
+						rackLabel = "Rack " + rackRec.ID.toString();
+					}
+					rows.add({"ID":rackRec.ID.toString(),"label":rackLabel,"parent":parentId});
+				}
+			}
+		}
+		else if(source == "segments")
+		{
+			for each  segmentRec in Bay[ID != 0] sort by Segment_No
+			{
+				if(segmentRec.Active != false)
+				{
+					parentId = "";
+					if(segmentRec.Rack != null)
+					{
+						parentId = segmentRec.Rack.toString();
+					}
+					palletCode = ifnull(segmentRec.Segment_Code,"").trim();
+					if(palletCode == "")
+					{
+						palletCode = "P" + ifnull(segmentRec.Segment_No,"").toString();
+					}
+					bayLetter = ifnull(segmentRec.Bay_Letter,"").toString();
+					bayLevel = ifnull(segmentRec.Level,"").toString();
+					baySide = ifnull(segmentRec.Side,"").toString();
+					bayPath = ifnull(segmentRec.Location_Path,"").trim();
+					bayLabel = palletCode;
+					if(bayPath != "")
+					{
+						bayLabel = bayPath + " · " + palletCode;
+					}
+					capacityQty = ifnull(segmentRec.Capacity,0);
+					freeQty = capacityQty - ifnull(segmentRec.Occupied_Qty,0);
+					bayStatus = "";
+					if(segmentRec.Status != null)
+					{
+						bayStatus = ifnull(segmentRec.Status.Status_Name,"");
+					}
+					rows.add({"ID":segmentRec.ID.toString(),"label":bayLabel,"parent":parentId,"free":freeQty,"capacity":capacityQty,"active":bayStatus != "Blocked","bay":bayLetter,"level":bayLevel,"side":baySide,"pallet":palletCode,"pallet_no":ifnull(segmentRec.Pallet_No,"").toString(),"path":bayPath});
+				}
+			}
+		}
+		else if(source == "dnStatuses")
+		{
+			for each  statusRec in Status[Modules.contains("Delivery Note")] sort by Index_field
+			{
+				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,""),"index":ifnull(statusRec.Index_field,0),"order":ifnull(statusRec.Order,0)});
 			}
 		}
 		else if(source == "taxes")
@@ -122,12 +220,11 @@ map Widget.project_options(string quo_data)
 				rows.add({"ID":statusRec.ID.toString(),"label":ifnull(statusRec.Status_Name,"")});
 			}
 		}
-		// Task lists of the Task Administrator template (Type Task, no parent) — the values of Milestone.Task_List
-		else if(source == "taskListTemplates")
+		else if(source == "projectRoles")
 		{
-			for each  listRec in Administration_Milestone_project_Template[Type_field == "Task" && Parent_Task == null] sort by Index_field
+			for each  roleRec in Roles[ID != 0] sort by Index_field
 			{
-				rows.add({"ID":listRec.ID.toString(),"label":ifnull(listRec.Task_Name,"")});
+				rows.add({"ID":roleRec.ID.toString(),"label":ifnull(roleRec.Role,"")});
 			}
 		}
 		else if(source == "departments")
@@ -141,7 +238,6 @@ map Widget.project_options(string quo_data)
 		{
 			rows = null;
 		}
-		// An unknown source is an error (an older function in Creator), never a silently empty dropdown
 		if(rows == null)
 		{
 			response = {"status":"error","code":"INVALID","message":"Unknown action: " + source};

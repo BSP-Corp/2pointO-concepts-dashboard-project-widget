@@ -1,9 +1,3 @@
-// Widget.project_create_po(string quo_data) — Procurement "Create purchase order". Custom API: Widget_Project_Create_PO (POST, quo_data).
-// quo_data: {"project_id","vendor_id","country_id","date":"dd-MMM-yyyy","delivery_date","reference","notes","terms","terms_days",
-//            "warehouse_id","discount","lines":[{"boq_id","product_id","line_id","description","quantity","rate","tax_id"}]}
-// Order: 1) Purchase_Order + PO_Line_Items are created in Creator and checked; 2) only then the EXISTING
-// ZohoBooks.Purchase_Order_Creator_books_Sync runs; 3) its result is read back (UAE_ZB_ID / SAR_ZB_ID). PO#, date and
-// status are written back to every BOQ line. Issued by = the logged-in user (Added_User).
 map Widget.project_create_po(string quo_data)
 {
 	response = Map();
@@ -20,6 +14,28 @@ map Widget.project_create_po(string quo_data)
 		countryText = ifnull(req.get("country_id"),"").toString();
 		lines = ifnull(req.get("lines"),List());
 		errors = List();
+		existingText = ifnull(req.get("po_id"),"").toString();
+		existingId = 0;
+		if(existingText.isNumber())
+		{
+			existingPo = Purchase_Order[ID == existingText.toLong()];
+			if(existingPo.count() == 0)
+			{
+				errors.add("The selected purchase order no longer exists");
+			}
+			else if(existingPo.Project_reference != projRec.ID)
+			{
+				errors.add("The selected purchase order belongs to another project");
+			}
+			else if(existingPo.Vendor_Name.toString() != vendorText)
+			{
+				errors.add("The selected purchase order is for another vendor");
+			}
+			else
+			{
+				existingId = existingPo.ID;
+			}
+		}
 		if(projRec.count() == 0)
 		{
 			errors.add("Project not found");
@@ -36,13 +52,25 @@ map Widget.project_create_po(string quo_data)
 		{
 			errors.add("Add at least one BOQ line");
 		}
-		// Procured quantity (existing PO lines for the same BOQ + product) + new quantity must not exceed the BOQ quantity
 		boqIds = List();
 		subTotal = 0.0;
+		divisionValues = {"Audio Visual","Digital Signage","Shared/Overhead"};
+		transitValues = {"Road","Air","Sea"};
+		transitText = ifnull(req.get("mode_of_transit"),"").toString();
+		if(transitText != "" && !transitValues.contains(transitText))
+		{
+			errors.add("Mode of transit must be Road, Air or Sea");
+		}
+		etaText = ifnull(req.get("eta"),"").toString();
 		for each  line in lines
 		{
 			boqRec = BOQ[ID == ifnull(line.get("boq_id"),"0").toString().toLong()];
 			productText = ifnull(line.get("product_id"),"").toString();
+			lineDivision = ifnull(line.get("division"),"").toString();
+			if(!divisionValues.contains(lineDivision) && !errors.contains("Select the reporting tag (Division) of every line"))
+			{
+				errors.add("Select the reporting tag (Division) of every line");
+			}
 			quantity = ifnull(line.get("quantity"),"0").toString().toDecimal();
 			rate = ifnull(line.get("rate"),"0").toString().toDecimal();
 			if(boqRec.count() == 0 || !productText.isNumber())
@@ -56,7 +84,7 @@ map Widget.project_create_po(string quo_data)
 			else
 			{
 				ordered = 0.0;
-				for each  poLineRec in PO_Line_Items[Item_Name == productText.toLong()]
+				for each  poLineRec in PO_Line_Items[Item_Name == productText.toLong() && is_PR == false]
 				{
 					poRec = Purchase_Order[ID == poLineRec.Purchase_Order];
 					if(poRec.count() > 0 && ifnull(poRec.BOQ,List()).contains(boqRec.ID.toString()))
@@ -75,174 +103,286 @@ map Widget.project_create_po(string quo_data)
 				subTotal = subTotal + quantity * rate;
 			}
 		}
+		if(errors.size() == 0)
+		{
+			vendorError = thisapp.ZohoBooks.Ensure_Vendor_Books_ID(vendorText.toLong(),countryText.toLong());
+			if(vendorError != "")
+			{
+				errors.add(vendorError);
+			}
+		}
 		if(errors.size() > 0)
 		{
 			response = {"status":"error","code":"INVALID","message":errors.toString("; ")};
 		}
 		else
 		{
-			// Same numbering as the Purchase_Order "Update PO Number" workflow
-			nextNo = "PO-00001";
-			lastRec = Purchase_Order[PO_No != null && PO_No != ""] sort by PO_No desc range from 1 to 1;
-			if(lastRec.count() > 0)
-			{
-				nextNo = "PO-" + leftpad((lastRec.PO_No.getSuffix("PO-").toLong() + 1).toString(),5).replaceAll(" ","0");
-			}
+			apiBase = "https://www.zohoapis.com/creator/v2.1/data/2point0concepts/point0concepts";
+			apiHeaders = Map();
+			apiHeaders.put("environment","development");
 			discount = ifnull(req.get("discount"),"0").toString().toDecimal();
 			poDate = zoho.currentdate;
 			if(ifnull(req.get("date"),"").toString() != "")
 			{
 				poDate = req.get("date").toString().toDate();
 			}
-			deliveryDate = null;
-			if(ifnull(req.get("delivery_date"),"").toString() != "")
-			{
-				deliveryDate = req.get("delivery_date").toString().toDate();
-			}
-			// Terms days → Terms & Conditions (the form has no terms-days field; Books gets it with the terms)
 			termsText = ifnull(req.get("terms"),"").toString().trim();
 			termsDays = ifnull(req.get("terms_days"),"").toString().trim();
 			if(termsDays.isNumber())
 			{
 				termsText = ("Payment terms: " + termsDays + " days\n" + termsText).trim();
 			}
-			warehouseText = ifnull(req.get("warehouse_id"),"").toString();
-			warehouseId = null;
-			if(warehouseText.isNumber())
-			{
-				warehouseId = warehouseText.toLong();
-			}
-			// Initial PO status: first Status record of the "Purchase Order" module
-			poStatusId = null;
-			poStatusList = Status[Modules.contains("Purchase Order")] sort by Index_field;
-			if(poStatusList.count() > 0)
-			{
-				poStatusId = poStatusList.ID;
-			}
-			salesRef = null;
-			if(eidValue != 0)
-			{
-				salesRef = eidValue;
-			}
-			poId = insert into Purchase_Order
-			[
-				Added_User=zoho.loginuser
-				Project_reference=projRec.ID
-				Sales_Reference=salesRef
-				PO_Status=poStatusId
-				Warehouse=warehouseId
-				Vendor_Name=vendorText.toLong()
-				Country=countryText.toLong()
-				PO_No=nextNo
-				Date_field=poDate
-				Delivery_Date=deliveryDate
-				Reference=ifnull(req.get("reference"),"").toString()
-				Customer=projRec.Client_Name
-				BOQ=boqIds
-				Notes=ifnull(req.get("notes"),"").toString()
-				Terms_Conditions=termsText
-				Discount=discount
-				Sub_Total=subTotal
-				Total_Cost=subTotal - subTotal * discount / 100
-			];
+			newRows = List();
 			for each  line in lines
 			{
 				quantity = line.get("quantity").toString().toDecimal();
 				rate = line.get("rate").toString().toDecimal();
-				lineText = ifnull(line.get("line_id"),"").toString();
-				estimateLine = null;
-				if(lineText.isNumber())
-				{
-					estimateLine = lineText.toLong();
-				}
+				rowMap = Map();
+				rowMap.put("Item_Name",line.get("product_id").toString());
+				rowMap.put("Item_Description",ifnull(line.get("description"),"").toString());
+				rowMap.put("Quantity",quantity.round(0).toLong());
+				rowMap.put("Rate",rate);
+				rowMap.put("Amount",(quantity * rate).round(2));
+				rowMap.put("Quantity_Received",0);
+				rowMap.put("Quantity_to_be_Received",quantity.round(0).toLong());
+				rowMap.put("is_PR",false);
+				rowMap.put("Received",false);
 				taxText = ifnull(line.get("tax_id"),"").toString();
-				taxId = null;
 				if(taxText.isNumber())
 				{
-					taxId = taxText.toLong();
+					rowMap.put("Tax",taxText);
 				}
-				insert into PO_Line_Items
-				[
-					Added_User=zoho.loginuser
-					Purchase_Order=poId
-					Item_Name=line.get("product_id").toString().toLong()
-					Item_Description=ifnull(line.get("description"),"").toString()
-					Quantity=quantity.round(0).toLong()
-					Rate=rate
-					Tax=taxId
-					Amount=quantity * rate
-					Quantity_Received=0
-					Quantity_to_be_Received=quantity.round(0).toLong()
-					Estimate_Line_ID=estimateLine
-				];
+				lineText = ifnull(line.get("line_id"),"").toString();
+				if(lineText.isNumber())
+				{
+					rowMap.put("Estimate_Line_ID",lineText);
+				}
+				boqLineText = ifnull(line.get("boq_id"),"").toString();
+				if(boqLineText.isNumber())
+				{
+					rowMap.put("BOQ",boqLineText);
+				}
+				rowMap.put("Division",ifnull(line.get("division"),"").toString());
+				newRows.add(rowMap);
 			}
-			// 1) Check the PO and all its lines exist in Creator before anything goes to Books
-			poRec = Purchase_Order[ID == poId];
-			savedLines = PO_Line_Items[Purchase_Order == poId].count();
-			if(poRec.count() == 0 || savedLines != lines.size())
+			taxTotal = 0.0;
+			for each  line in lines
 			{
-				response = {"status":"error","code":"EXCEPTION","message":"The purchase order was not saved completely in Creator (" + savedLines + " of " + lines.size() + " lines) — nothing was sent to Zoho Books"};
+				taxText = ifnull(line.get("tax_id"),"").toString();
+				if(taxText.isNumber())
+				{
+					taxRec = Taxes[ID == taxText.toLong()];
+					if(taxRec.count() > 0)
+					{
+						lineAmount = line.get("quantity").toString().toDecimal() * line.get("rate").toString().toDecimal();
+						taxTotal = taxTotal + lineAmount * (1 - discount / 100) * ifnull(taxRec.Rate,0) / 100;
+					}
+				}
+			}
+			boqList = List();
+			for each  boqId in boqIds
+			{
+				boqList.add(boqId.toString());
+			}
+			linesBefore = 0;
+			poId = 0;
+			apiError = "";
+			if(existingId == 0)
+			{
+				poData = Map();
+				poData.put("Project_reference",projRec.ID.toString());
+				if(eidValue != 0)
+				{
+					poData.put("Sales_Reference",eidValue.toString());
+				}
+				poStatusList = Status[Modules.contains("Purchase Order")] sort by Index_field;
+				if(poStatusList.count() > 0)
+				{
+					poData.put("PO_Status",poStatusList.ID.toString());
+				}
+				warehouseText = ifnull(req.get("warehouse_id"),"").toString();
+				if(warehouseText.isNumber())
+				{
+					poData.put("Warehouse",warehouseText);
+				}
+				if(projRec.Client_Name != null)
+				{
+					poData.put("Customer",projRec.Client_Name.toString());
+				}
+				poData.put("PO_No","NEW");
+				poData.put("Vendor_Name",vendorText);
+				poData.put("Country",countryText);
+				poData.put("Date_field",poDate.toString("dd-MMM-yyyy"));
+				if(ifnull(req.get("delivery_date"),"").toString() != "")
+				{
+					poData.put("Delivery_Date",req.get("delivery_date").toString().toDate().toString("dd-MMM-yyyy"));
+				}
+				poData.put("Reference",ifnull(req.get("reference"),"").toString());
+				poData.put("BOQ",boqList);
+				poData.put("Notes",ifnull(req.get("notes"),"").toString());
+				poData.put("Terms_Conditions",termsText);
+				poData.put("Discount",discount);
+				poData.put("Sub_Total",subTotal.round(2));
+				poData.put("Total_Cost",(subTotal - subTotal * discount / 100 + taxTotal).round(2));
+				poData.put("Item_Table",newRows);
+				resultMap = Map();
+				resultMap.put("fields",{"PO_No"});
+				resultMap.put("message",true);
+				bodyMap = Map();
+				bodyMap.put("data",poData);
+				bodyMap.put("result",resultMap);
+				apiResp = invokeurl
+				[
+					url :apiBase + "/form/Purchase_Order"
+					type :POST
+					parameters:bodyMap.toString()
+					headers:apiHeaders
+					connection:"zoho_creator"
+				];
+				if(ifnull(apiResp.get("code"),"").toString() == "3000")
+				{
+					apiData = apiResp.get("data");
+					poId = apiData.get("ID").toString().toLong();
+				}
+				else
+				{
+					apiError = ifnull(apiResp.get("error"),"").toString();
+					if(apiError == "")
+					{
+						apiError = ifnull(apiResp.get("message"),"").toString();
+					}
+					if(apiError == "")
+					{
+						apiError = apiResp.toString();
+					}
+				}
 			}
 			else
 			{
-				// 2) Write PO#, date and status back to every BOQ line (comma-separated PO# when a line has several POs)
-				orderedStatus = null;
-				for each  boqStatusRec in Status[Modules.contains("BOQ")]
+				allRows = List();
+				allTotal = 0.0;
+				for each  keepLineRec in PO_Line_Items[Purchase_Order == existingId]
 				{
-					if(ifnull(boqStatusRec.Status_Name,"").trim().toLowerCase().startsWith("ordered"))
+					keepRow = Map();
+					keepRow.put("ID",keepLineRec.ID.toString());
+					allRows.add(keepRow);
+					if(keepLineRec.is_PR == false)
 					{
-						orderedStatus = boqStatusRec.ID;
+						linesBefore = linesBefore + 1;
+						allTotal = allTotal + ifnull(keepLineRec.Amount,0);
+						if(keepLineRec.Tax != null)
+						{
+							keepTaxRec = Taxes[ID == keepLineRec.Tax];
+							taxTotal = taxTotal + ifnull(keepLineRec.Amount,0) * (1 - ifnull(existingPo.Discount,0) / 100) * ifnull(keepTaxRec.Rate,0) / 100;
+						}
 					}
 				}
-				for each  boqId in boqIds
+				allRows.addAll(newRows);
+				allTotal = allTotal + subTotal;
+				poBoq = List();
+				for each  oldBoq in ifnull(existingPo.BOQ,List())
 				{
-					boqRec = BOQ[ID == boqId];
-					if(ifnull(boqRec.PO,"").trim() == "")
+					poBoq.add(oldBoq.toString());
+				}
+				for each  newBoq in boqList
+				{
+					if(!poBoq.contains(newBoq))
 					{
-						boqRec.PO=nextNo;
-						boqRec.PO_Date=poDate;
-					}
-					else if(!boqRec.PO.contains(nextNo))
-					{
-						boqRec.PO=boqRec.PO + ", " + nextNo;
-					}
-					if(orderedStatus != null)
-					{
-						boqRec.Status=orderedStatus;
+						poBoq.add(newBoq);
 					}
 				}
-				// 3) Zoho Books — only after the Creator PO is complete
-				thisapp.ZohoBooks.Purchase_Order_Creator_books_Sync(poId);
+				existingDiscount = ifnull(existingPo.Discount,0);
+				poData = Map();
+				poData.put("Item_Table",allRows);
+				poData.put("BOQ",poBoq);
+				poData.put("Sub_Total",allTotal.round(2));
+				poData.put("Total_Cost",(allTotal - allTotal * existingDiscount / 100 + taxTotal).round(2));
+				poData.put("PR_All_Received",false);
+				bodyMap = Map();
+				bodyMap.put("data",poData);
+				apiResp = invokeurl
+				[
+					url :apiBase + "/report/All_Purchase_Orders/" + existingId
+					type :PATCH
+					parameters:bodyMap.toString()
+					headers:apiHeaders
+					connection:"zoho_creator"
+				];
+				if(ifnull(apiResp.get("code"),"").toString() == "3000")
+				{
+					poId = existingId;
+				}
+				else
+				{
+					apiError = ifnull(apiResp.get("error"),"").toString();
+					if(apiError == "")
+					{
+						apiError = ifnull(apiResp.get("message"),"").toString();
+					}
+					if(apiError == "")
+					{
+						apiError = apiResp.toString();
+					}
+				}
+			}
+			if(poId == 0)
+			{
+				response = {"status":"error","code":"API","message":"Creator did not save the purchase order: " + apiError};
+			}
+			else
+			{
 				poRec = Purchase_Order[ID == poId];
-				booksId = ifnull(poRec.UAE_ZB_ID,"");
-				if(booksId == "")
+				savedLines = PO_Line_Items[Purchase_Order == poId && is_PR == false].count() - linesBefore;
+				if(poRec.count() == 0 || savedLines != lines.size())
 				{
-					booksId = ifnull(poRec.SAR_ZB_ID,"");
+					response = {"status":"error","code":"EXCEPTION","message":"The purchase order was not saved completely in Creator (" + savedLines + " of " + lines.size() + " lines)"};
 				}
-				booksMessage = "";
-				if(booksId == "")
+				else
 				{
-					// Say why, from the same data the Books function needs
-					countryRec = Country[ID == poRec.Country];
-					vendorRec = Vendors[ID == poRec.Vendor_Name];
-					if(countryRec.count() == 0 || countryRec.Books_Org_ID == null)
+					booksId = ifnull(poRec.UAE_ZB_ID,"");
+					if(booksId == "")
 					{
-						booksMessage = "The PO country has no Books organisation (Country.Books_Org_ID).";
+						booksId = ifnull(poRec.SAR_ZB_ID,"");
 					}
-					else if(countryRec.Index_field == 1 && ifnull(vendorRec.UAE_ZB_ID,"") == "")
+					booksMessage = "";
+					if(booksId == "")
 					{
-						booksMessage = "The vendor is not linked to Zoho Books UAE (Vendors.UAE_ZB_ID is empty).";
+						booksMessage = "Saved in Creator. Zoho Books is updated by the Purchase Order workflow — no Books ID yet.";
 					}
-					else if(countryRec.Index_field == 2 && ifnull(vendorRec.SAR_ZB_ID,"") == "")
+					etaDate = poRec.Delivery_Date;
+					if(existingId == 0)
 					{
-						booksMessage = "The vendor is not linked to Zoho Books KSA (Vendors.SAR_ZB_ID is empty).";
+						if(ifnull(req.get("delivery_date"),"").toString() != "")
+						{
+							etaDate = req.get("delivery_date").toString().toDate();
+						}
 					}
-					else
+					if(etaText != "")
 					{
-						booksMessage = "Zoho Books did not accept the PO — see Developer_Log (\"Error in Create PO In Books\"); check that every item has its Books item ID.";
+						etaDate = etaText.toDate();
 					}
+					for each  etaBoqId in boqIds
+					{
+						etaBoqRec = BOQ[ID == etaBoqId];
+						if(etaBoqRec.count() > 0)
+						{
+							if(etaDate != null)
+							{
+								etaBoqRec.ETA=etaDate;
+							}
+							if(transitText != "")
+							{
+								etaBoqRec.Mode_of_Transit=transitText;
+							}
+						}
+					}
+					savedPoNo = ifnull(poRec.Purchase_Order_Books_No,"").trim();
+					if(savedPoNo == "")
+					{
+						savedPoNo = ifnull(poRec.PO_No,"");
+					}
+					response = {"status":"success","id":poId.toString(),"PO_No":savedPoNo,"Books_Synced":booksId != "","Books_ID":booksId,"Books_Message":booksMessage,"Added_To_Existing":existingId != 0};
 				}
-				response = {"status":"success","id":poId.toString(),"PO_No":nextNo,"Books_Synced":booksId != "","Books_ID":booksId,"Books_Message":booksMessage};
 			}
 		}
 	}

@@ -1,0 +1,42 @@
+			Registration_Notes
+			(
+    			type = textarea
+				displayname = "Registration Notes"
+				height = 100px
+    			description
+    			[
+    				type = help_text
+    			 	message = "Please take notes."
+    			]
+	 			row = 15
+	 			column = 1   
+				width = medium
+			)
+			Warranty_Document
+			(
+    			type = upload file
+				displayname = "Please Upload BOQ & Warranty Items"
+				browse = local_drive
+	 			row = 15
+	 			column = 1   
+				width = medium
+			)
+			Shop_Drawings_Status
+			(
+				type = picklist
+				displayname = "Shop Drawings Status"
+				maxchar = 100
+				values = {"Pending","In Progress","Submitted","Approved"}
+	 			row = 15
+	 			column = 2   
+				width = medium
+			)
+			Solution_Architect_Signature
+			(
+    			type = signature
+				displayname = "Solution Architect Signature"
+	 			row = 15
+	 			column = 2   
+				width = medium
+				personal data = true
+			)

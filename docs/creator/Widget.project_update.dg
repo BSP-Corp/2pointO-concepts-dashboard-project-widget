@@ -1,9 +1,3 @@
-// Widget.project_update(string quo_data) — UPDATE one Project. Custom API: Widget_Project_Update (PUT, quo_data).
-// quo_data: {"project_id":"…","data":{only the changed fields},"reason":"…"}; dates dd-MMM-yyyy, lookups = record ID, "" clears.
-// Project_Status follows the static order of Widget.status_order(): next stage only; back needs a reason; skipping needs admin;
-// "On Hold" / "Cancelled" can be set at any stage. Every status change appends a line to Status_History:
-//   dd-MMM-yyyy HH:mm:ss | <Status> | <User> | <Reason>
-// End date (Project_Completion_Date) must be on or after Start_Date.
 map Widget.project_update(string quo_data)
 {
 	response = Map();
@@ -11,281 +5,651 @@ map Widget.project_update(string quo_data)
 	{
 		req = quo_data.toMap();
 		data = ifnull(req.get("data"),Map());
-		projRec = Project[ID == ifnull(req.get("project_id"),"0").toString().toLong()];
-		ruleError = "";
-		newStatusName = "";
-		if(projRec.count() > 0 && data.containKey("Project_Status"))
+		if(ifnull(req.get("action"),"").toString() == "task_list_item")
 		{
-			order = thisapp.Widget.status_order();
-			stages = order.get("project");
-			anytime = order.get("anytime");
-			newText = ifnull(data.get("Project_Status"),"").toString();
-			newStatusRec = Status[ID == 0];
-			if(newText.isNumber())
+			itemName = ifnull(data.get("Task_Name"),"").toString().trim();
+			itemStatus = ifnull(data.get("Status"),"Active").toString();
+			itemStatusList = {"Active","Inactive"};
+			itemIdText = ifnull(data.get("ID"),"").toString();
+			itemId = 0;
+			if(itemIdText.isNumber())
 			{
-				newStatusRec = Status[ID == newText.toLong()];
+				itemId = itemIdText.toLong();
 			}
-			if(newStatusRec.count() > 0)
+			itemDupes = Project_Registration_Task_List[Task_Name == itemName && ID != itemId].count();
+			if(itemName == "")
 			{
-				newStatusName = ifnull(newStatusRec.Status_Name,"").trim();
+				response = {"status":"error","code":"INVALID","message":"Task Name is required"};
 			}
-			currentName = "";
-			if(projRec.Project_Status != null)
+			else if(itemName.length() > 255)
 			{
-				currentName = ifnull(projRec.Project_Status.Status_Name,"").trim();
+				response = {"status":"error","code":"INVALID","message":"Task Name is longer than 255 characters"};
 			}
-			toPos = stages.indexOf(newStatusName);
-			fromPos = stages.indexOf(currentName);
-			loginRec = Users[Email == zoho.loginuserid];
-			roleAdmin = false;
-			if(loginRec.count() > 0)
+			else if(!itemStatusList.contains(itemStatus))
 			{
-				roleAdmin = ifnull(loginRec.Role,"") == "Administrator";
+				response = {"status":"error","code":"INVALID","message":"Status must be Active or Inactive"};
 			}
-			isAdmin = zoho.loginuser == zoho.adminuser || zoho.loginuserid.equalsIgnoreCase(zoho.adminuserid) || roleAdmin;
-			notStage = toPos < 0 && !anytime.contains(newStatusName);
-			if(newStatusName == "" || notStage)
+			else if(itemDupes > 0)
 			{
-				ruleError = "The selected status is not a project stage";
+				response = {"status":"error","code":"DUPLICATE","message":"This item is already in the list"};
 			}
-			else if(toPos >= 0 && fromPos >= 0 && toPos > fromPos + 1 && !isAdmin)
+			else if(itemId > 0)
 			{
-				ruleError = "Stages cannot be skipped — move to the next stage";
-			}
-			else if(toPos >= 0 && fromPos >= 0 && toPos < fromPos && ifnull(req.get("reason"),"").toString().trim() == "")
-			{
-				ruleError = "A reason is required to move the project back";
-			}
-		}
-		startText = ifnull(data.get("Start_Date"),"").toString().trim();
-		endText = ifnull(data.get("Project_Completion_Date"),"").toString().trim();
-		if(projRec.count() > 0 && ruleError == "")
-		{
-			startValue = projRec.Start_Date;
-			endValue = projRec.Project_Completion_Date;
-			if(data.containKey("Start_Date"))
-			{
-				startValue = null;
-				if(startText != "")
+				itemRec = Project_Registration_Task_List[ID == itemId];
+				if(itemRec.count() == 0)
 				{
-					startValue = startText.toDate();
+					response = {"status":"error","code":"NOT_FOUND","message":"Checklist item not found"};
+				}
+				else
+				{
+					itemRec.Task_Name=itemName;
+					itemRec.Status=itemStatus;
+					response = {"status":"success","id":itemRec.ID.toString()};
 				}
 			}
-			if(data.containKey("Project_Completion_Date"))
+			else
 			{
-				endValue = null;
-				if(endText != "")
-				{
-					endValue = endText.toDate();
-				}
+				itemNewId = insert into Project_Registration_Task_List
+				[
+					Added_User=zoho.loginuser
+					Task_Name=itemName
+					Status=itemStatus
+				];
+				response = {"status":"success","id":itemNewId.toString()};
 			}
-			if(startValue != null && endValue != null && endValue < startValue)
-			{
-				ruleError = "Project Completion Date must be on or after the Start Date";
-			}
-		}
-		if(projRec.count() == 0)
-		{
-			response = {"status":"error","code":"NOT_FOUND","message":"Project not found"};
-		}
-		else if(ruleError != "")
-		{
-			response = {"status":"error","code":"INVALID","message":ruleError};
 		}
 		else
 		{
-			before = thisapp.Widget.activity_values("Project",projRec.ID.toString());
-			dateFields = {"Start_Date","Project_Completion_Date","Actual_Completion_Date","Date_PO_Received"};
-			moneyFields = {"Project_Value_PO","Estimate_Value_Sub_Total","Hardware","Software","Outsourced_Services","Logistics","point0_Services","Estimated_Margin","Total_Budget_Cost"};
-			for each  fieldName in data.keys()
+			projRec = Project[ID == ifnull(req.get("project_id"),"0").toString().toLong()];
+			ruleError = "";
+			newStatusName = "";
+			if(projRec.count() > 0 && data.containKey("Project_Status"))
 			{
-				textValue = ifnull(data.get(fieldName),"").toString().trim();
-				dateValue = null;
-				numberValue = null;
-				idValue = null;
-				if(textValue != "" && dateFields.contains(fieldName))
+				order = thisapp.Widget.status_order();
+				stages = order.get("project");
+				anytime = order.get("anytime");
+				newText = ifnull(data.get("Project_Status"),"").toString();
+				newStatusRec = Status[ID == 0];
+				if(newText.isNumber())
 				{
-					dateValue = textValue.toDate();
+					newStatusRec = Status[ID == newText.toLong()];
 				}
-				if(textValue != "" && moneyFields.contains(fieldName))
+				if(newStatusRec.count() > 0)
 				{
-					numberValue = textValue.toDecimal();
+					newStatusName = ifnull(newStatusRec.Status_Name,"").trim();
 				}
-				if(textValue.isNumber())
+				currentName = "";
+				if(projRec.Project_Status != null)
 				{
-					idValue = textValue.toLong();
+					currentName = ifnull(projRec.Project_Status.Status_Name,"").trim();
 				}
-				if(fieldName == "Project_Reference")
+				toPos = stages.indexOf(newStatusName);
+				fromPos = stages.indexOf(currentName);
+				loginRec = Users[Email == zoho.loginuserid];
+				roleAdmin = false;
+				if(loginRec.count() > 0)
 				{
-					projRec.Project_Reference=textValue;
+					roleAdmin = ifnull(loginRec.Role,"") == "Administrator";
 				}
-				else if(fieldName == "Project_Name")
+				isAdmin = zoho.loginuser == zoho.adminuser || zoho.loginuserid.equalsIgnoreCase(zoho.adminuserid) || roleAdmin;
+				notStage = toPos < 0 && !anytime.contains(newStatusName);
+				if(newStatusName == "" || notStage)
 				{
-					projRec.Project_Name=textValue;
+					ruleError = "The selected status is not a project stage";
 				}
-				else if(fieldName == "Type_of_Project")
+				else if(toPos >= 0 && fromPos >= 0 && toPos > fromPos + 1 && !isAdmin)
 				{
-					projRec.Type_of_Project=textValue;
+					ruleError = "Stages cannot be skipped — move to the next stage";
 				}
-				else if(fieldName == "City")
+				else if(toPos >= 0 && fromPos >= 0 && toPos < fromPos && ifnull(req.get("reason"),"").toString().trim() == "")
 				{
-					projRec.City=textValue;
+					ruleError = "A reason is required to move the project back";
 				}
-				else if(fieldName == "State")
+				kickPos = stages.indexOf("Kick-Off Done");
+				if(ruleError == "" && kickPos >= 0 && toPos >= kickPos && fromPos < kickPos && !anytime.contains(currentName))
 				{
-					projRec.State=textValue;
-				}
-				else if(fieldName == "Project_Description")
-				{
-					projRec.Project_Description=textValue;
-				}
-				else if(fieldName == "Client_PO_No")
-				{
-					projRec.Client_PO_No=textValue;
-				}
-				else if(fieldName == "Sales_Order_No")
-				{
-					projRec.Sales_Order_No=textValue;
-				}
-				else if(fieldName == "Start_Date")
-				{
-					projRec.Start_Date=dateValue;
-				}
-				else if(fieldName == "Project_Completion_Date")
-				{
-					projRec.Project_Completion_Date=dateValue;
-				}
-				else if(fieldName == "Actual_Completion_Date")
-				{
-					projRec.Actual_Completion_Date=dateValue;
-				}
-				else if(fieldName == "Date_PO_Received")
-				{
-					projRec.Date_PO_Received=dateValue;
-				}
-				else if(fieldName == "Project_Value_PO")
-				{
-					projRec.Project_Value_PO=numberValue;
-				}
-				else if(fieldName == "Estimate_Value_Sub_Total")
-				{
-					projRec.Estimate_Value_Sub_Total=numberValue;
-				}
-				else if(fieldName == "Hardware")
-				{
-					projRec.Hardware=numberValue;
-				}
-				else if(fieldName == "Software")
-				{
-					projRec.Software=numberValue;
-				}
-				else if(fieldName == "Outsourced_Services")
-				{
-					projRec.Outsourced_Services=numberValue;
-				}
-				else if(fieldName == "Logistics")
-				{
-					projRec.Logistics=numberValue;
-				}
-				else if(fieldName == "point0_Services")
-				{
-					projRec.point0_Services=numberValue;
-				}
-				else if(fieldName == "Estimated_Margin")
-				{
-					projRec.Estimated_Margin=numberValue;
-				}
-				else if(fieldName == "Total_Budget_Cost")
-				{
-					projRec.Total_Budget_Cost=numberValue;
-				}
-				else if(fieldName == "Client_Name")
-				{
-					projRec.Client_Name=idValue;
-				}
-				else if(fieldName == "Project_Status")
-				{
-					projRec.Project_Status=idValue;
-				}
-				else if(fieldName == "Currency")
-				{
-					projRec.Currency=idValue;
-				}
-				else if(fieldName == "Accepted_Estimate")
-				{
-					projRec.Accepted_Estimate=idValue;
-				}
-				else if(fieldName == "Project_Registration_Task_List")
-				{
-					projRec.Project_Registration_Task_List=idValue;
-				}
-				else if(fieldName == "Project_Manager")
-				{
-					projRec.Project_Manager=idValue;
-				}
-				else if(fieldName == "Solution_Architect")
-				{
-					projRec.Solution_Architect=idValue;
-				}
-				else if(fieldName == "Finance_Representative")
-				{
-					projRec.Finance_Representative=idValue;
-				}
-				else if(fieldName == "Health_Safety_Manager")
-				{
-					projRec.Health_Safety_Manager=idValue;
-				}
-				else if(fieldName == "Sales_Representative")
-				{
-					projRec.Sales_Representative=idValue;
-				}
-				else if(fieldName == "Lead_Engineer")
-				{
-					projRec.Lead_Engineer=idValue;
-				}
-				else if(fieldName == "Logistics_Coordinator")
-				{
-					projRec.Logistics_Coordinator=idValue;
-				}
-				else if(fieldName == "Sales_Person")
-				{
-					projRec.Sales_Person=idValue;
-				}
-				else if(fieldName == "Project_manager_Approval")
-				{
-					projRec.Project_manager_Approval=idValue;
-				}
-				else if(fieldName == "Country")
-				{
-					countryIds = List();
-					for each  countryId in data.get("Country")
+					kickMissing = List();
+					if(ifnull(projRec.Project_Reference,"").toString().trim() == "")
 					{
-						countryIds.add(countryId.toString().toLong());
+						kickMissing.add("Project Reference #");
 					}
-					projRec.Country=countryIds;
-				}
-				else if(fieldName == "Address")
-				{
-					addressData = data.get("Address");
-					projRec.Address.address_line_1=ifnull(addressData.get("address_line_1"),"");
-					projRec.Address.address_line_2=ifnull(addressData.get("address_line_2"),"");
+					if(ifnull(projRec.Project_Name,"").toString().trim() == "")
+					{
+						kickMissing.add("Project Name");
+					}
+					if(ifnull(projRec.City,"").toString().trim() == "")
+					{
+						kickMissing.add("City");
+					}
+					if(ifnull(projRec.Type_of_Project,"").toString().trim() == "")
+					{
+						kickMissing.add("Type of Project");
+					}
+					if(ifnull(projRec.Shop_Drawings_Status,"").toString().trim() == "")
+					{
+						kickMissing.add("Shop Drawings Status");
+					}
+					if(ifnull(projRec.Project_Description,"").toString().trim() == "")
+					{
+						kickMissing.add("Project Description");
+					}
+					if(ifnull(projRec.Client_PO_No,"").toString().trim() == "")
+					{
+						kickMissing.add("Client Purchase Order #");
+					}
+					if(projRec.Client_Name == null)
+					{
+						kickMissing.add("Client Name");
+					}
+					if(ifnull(projRec.Country,List()).size() == 0)
+					{
+						kickMissing.add("Country");
+					}
+					kickAddress = "";
+					if(projRec.Address != null)
+					{
+						kickAddress = ifnull(projRec.Address.address_line_1,"").trim();
+					}
+					if(kickAddress == "")
+					{
+						kickMissing.add("Address");
+					}
+					if(projRec.Currency == null)
+					{
+						kickMissing.add("Currency");
+					}
+					if(projRec.Start_Date == null)
+					{
+						kickMissing.add("Start Date");
+					}
+					if(projRec.Project_Completion_Date == null)
+					{
+						kickMissing.add("Project Completion Date");
+					}
+					if(projRec.Project_Manager == null)
+					{
+						kickMissing.add("Project Manager");
+					}
+					if(projRec.Solution_Architect == null)
+					{
+						kickMissing.add("Pre Sales / Solution Architect");
+					}
+					if(projRec.Sales_Representative == null)
+					{
+						kickMissing.add("Sales Representative");
+					}
+					if(projRec.Finance_Representative == null)
+					{
+						kickMissing.add("Finance Representative");
+					}
+					if(projRec.Logistics_Coordinator == null)
+					{
+						kickMissing.add("Logistics");
+					}
+					if(projRec.Health_Safety_Manager == null)
+					{
+						kickMissing.add("Health & Safety Manager");
+					}
+					if(projRec.Project_Value_PO == null)
+					{
+						kickMissing.add("Project Value (PO)");
+					}
+					if(projRec.Date_PO_Received == null && ifnull(projRec.PO_Document,"").toString() == "")
+					{
+						kickMissing.add("Date PO Received or the PO / LOI / email file");
+					}
+					if(projRec.Hardware == null)
+					{
+						kickMissing.add("Hardware budget");
+					}
+					if(projRec.Software == null)
+					{
+						kickMissing.add("Software budget");
+					}
+					if(projRec.Outsourced_Services == null)
+					{
+						kickMissing.add("Outsourced Services budget");
+					}
+					if(projRec.point0_Services == null)
+					{
+						kickMissing.add("2point0 Services budget");
+					}
+					if(projRec.Logistics == null)
+					{
+						kickMissing.add("Logistics budget");
+					}
+					regTickedText = List();
+					for each  regTickedId in ifnull(projRec.Project_Registration_Task_List,List())
+					{
+						regTickedText.add(regTickedId.toString());
+					}
+					regOpenCount = 0;
+					for each  regCheckRec in Project_Registration_Task_List[Status == "Active"]
+					{
+						if(!regTickedText.contains(regCheckRec.ID.toString()))
+						{
+							regOpenCount = regOpenCount + 1;
+						}
+					}
+					if(regTickedText.size() == 0)
+					{
+						kickMissing.add("Project Registration Task List");
+					}
+					else if(regOpenCount > 0)
+					{
+						kickMissing.add("Project Registration Task List (" + regOpenCount + " not reviewed)");
+					}
+					if(projRec.Sales_Person == null)
+					{
+						kickMissing.add("Sales Person");
+					}
+					if(projRec.Project_manager_Approval == null)
+					{
+						kickMissing.add("Project manager Approval");
+					}
+					if(ifnull(projRec.Sales_Signature,"").toString() == "")
+					{
+						kickMissing.add("Sales Signature");
+					}
+					if(ifnull(projRec.Project_manager_Signature,"").toString() == "")
+					{
+						kickMissing.add("Project manager Signature");
+					}
+					kickAttendees = 0;
+					for each  kickAttendeeRow in projRec.Meeting_Attendees
+					{
+						kickAttendees = kickAttendees + 1;
+					}
+					if(kickAttendees == 0)
+					{
+						kickMissing.add("2point0 Meeting Attendees");
+					}
+					kickTeam = 0;
+					for each  kickTeamRow in projRec.Pro
+					{
+						kickTeam = kickTeam + 1;
+					}
+					if(kickTeam == 0)
+					{
+						kickMissing.add("Project Team");
+					}
+					kickTerms = 0;
+					for each  kickTermRow in projRec.Payment_Terms_Agreed
+					{
+						kickTerms = kickTerms + 1;
+					}
+					if(kickTerms == 0)
+					{
+						kickMissing.add("Payment Terms Agreed");
+					}
+					if(kickMissing.size() > 0)
+					{
+						ruleError = "Complete the Project Registration form before Kick-Off Done. Missing: " + kickMissing.toString(", ");
+					}
 				}
 			}
-			if(newStatusName != "")
+			startText = ifnull(data.get("Start_Date"),"").toString().trim();
+			endText = ifnull(data.get("Project_Completion_Date"),"").toString().trim();
+			if(projRec.count() > 0 && ruleError == "")
 			{
-				userName = zoho.loginuser;
-				historyUser = Users[Email == zoho.loginuserid];
-				if(historyUser.count() > 0 && ifnull(historyUser.Name,"") != "")
+				startValue = projRec.Start_Date;
+				endValue = projRec.Project_Completion_Date;
+				if(data.containKey("Start_Date"))
 				{
-					userName = historyUser.Name;
+					startValue = null;
+					if(startText != "")
+					{
+						startValue = startText.toDate();
+					}
 				}
-				line = zoho.currenttime.toString("dd-MMM-yyyy HH:mm:ss") + " | " + newStatusName + " | " + userName + " | " + ifnull(req.get("reason"),"").toString().trim().replaceAll("[\r\n|]"," ");
-				history = ifnull(projRec.Status_History,"").trim();
-				projRec.Status_History=if(history == "",line,history + "\n" + line);
+				if(data.containKey("Project_Completion_Date"))
+				{
+					endValue = null;
+					if(endText != "")
+					{
+						endValue = endText.toDate();
+					}
+				}
+				if(startValue != null && endValue != null && endValue < startValue)
+				{
+					ruleError = "Project Completion Date must be on or after the Start Date";
+				}
 			}
-			// Activity stream: every changed project field (status moves are also in Status_History)
-			thisapp.Widget.activity_add(projRec.ID.toString(),"Project",projRec.ID.toString(),ifnull(projRec.Project_Reference,""),before,thisapp.Widget.activity_values("Project",projRec.ID.toString()));
-			response = {"status":"success","id":projRec.ID.toString()};
+			teamGiven = data.containKey("Project_Team");
+			teamRows = List();
+			teamError = "";
+			if(projRec.count() > 0 && teamGiven)
+			{
+				teamInput = ifnull(data.get("Project_Team"),List());
+				seenMembers = List();
+				existingRowIds = List();
+				for each  oldTeamRow in projRec.Pro
+				{
+					existingRowIds.add(oldTeamRow.ID.toString());
+				}
+				for each  teamEntry in teamInput
+				{
+					memberText = ifnull(teamEntry.get("member_id"),"").toString().trim();
+					roleText = ifnull(teamEntry.get("role_id"),"").toString().trim();
+					rowText = ifnull(teamEntry.get("row_id"),"").toString().trim();
+					if(!memberText.isNumber())
+					{
+						teamError = "Choose a team member on every row";
+					}
+					else if(seenMembers.contains(memberText))
+					{
+						teamError = "A team member is listed twice";
+					}
+					else
+					{
+						teamUser = Users[ID == memberText.toLong()];
+						teamRole = Roles[ID == 0];
+						if(roleText.isNumber())
+						{
+							teamRole = Roles[ID == roleText.toLong()];
+						}
+						if(teamUser.count() == 0)
+						{
+							teamError = "Team member not found";
+						}
+						else if(roleText != "" && teamRole.count() == 0)
+						{
+							teamError = "Project role not found";
+						}
+						else
+						{
+							seenMembers.add(memberText);
+							teamRow = Map();
+							if(existingRowIds.contains(rowText))
+							{
+								teamRow.put("ID",rowText);
+							}
+							teamRow.put("Team_Member",memberText);
+							teamRow.put("Project_Role",roleText);
+							teamRows.add(teamRow);
+						}
+					}
+				}
+			}
+			if(ruleError == "" && teamError != "")
+			{
+				ruleError = teamError;
+			}
+			if(projRec.count() == 0)
+			{
+				response = {"status":"error","code":"NOT_FOUND","message":"Project not found"};
+			}
+			else if(ruleError != "")
+			{
+				response = {"status":"error","code":"INVALID","message":ruleError};
+			}
+			else
+			{
+				before = thisapp.Widget.activity_values("Project",projRec.ID.toString());
+				teamSaveError = "";
+				if(teamGiven)
+				{
+					teamData = Map();
+					teamData.put("Pro",teamRows);
+					teamBody = Map();
+					teamBody.put("data",teamData);
+					apiBase = "https://www.zohoapis.com/creator/v2.1/data/2point0concepts/point0concepts";
+					apiHeaders = Map();
+					apiHeaders.put("environment","development");
+					teamResp = invokeurl
+					[
+						url :apiBase + "/report/All_Projects/" + projRec.ID
+						type :PATCH
+						parameters:teamBody.toString()
+						headers:apiHeaders
+						connection:"zoho_creator"
+					];
+					teamCode = ifnull(teamResp.get("code"),"").toString();
+					if(teamCode != "3000")
+					{
+						teamSaveError = ifnull(teamResp.get("error"),"").toString();
+						if(teamSaveError == "")
+						{
+							teamSaveError = ifnull(teamResp.get("message"),"").toString();
+						}
+						if(teamSaveError == "")
+						{
+							teamSaveError = teamResp.toString();
+						}
+						thisapp.Creator.log_addition(zoho.loginuser,"Widget.project_update","PATCH All_Projects/" + projRec.ID + ": " + teamBody.toString(),teamResp.toString(),projRec.ID.toString(),"");
+					}
+				}
+				dateFields = {"Start_Date","Project_Completion_Date","Actual_Completion_Date","Date_PO_Received"};
+				moneyFields = {"Project_Value_PO","Estimate_Value_Sub_Total","Hardware","Software","Outsourced_Services","Logistics","point0_Services","Estimated_Margin","Total_Budget_Cost"};
+				for each  fieldName in data.keys()
+				{
+					textValue = ifnull(data.get(fieldName),"").toString().trim();
+					dateValue = null;
+					numberValue = null;
+					idValue = null;
+					if(textValue != "" && dateFields.contains(fieldName))
+					{
+						dateValue = textValue.toDate();
+					}
+					if(textValue != "" && moneyFields.contains(fieldName))
+					{
+						numberValue = textValue.toDecimal();
+					}
+					if(textValue.isNumber())
+					{
+						idValue = textValue.toLong();
+					}
+					if(fieldName == "Project_Reference")
+					{
+						projRec.Project_Reference=textValue;
+					}
+					else if(fieldName == "Project_Name")
+					{
+						projRec.Project_Name=textValue;
+					}
+					else if(fieldName == "Type_of_Project")
+					{
+						projRec.Type_of_Project=textValue;
+					}
+					else if(fieldName == "Registration_Notes")
+					{
+						projRec.Registration_Notes=ifnull(data.get("Registration_Notes"),"").toString();
+					}
+					else if(fieldName == "Shop_Drawings_Status")
+					{
+						shopValues = {"Pending","In Progress","Submitted","Approved"};
+						if(textValue == "")
+						{
+							projRec.Shop_Drawings_Status="";
+						}
+						else if(shopValues.contains(textValue))
+						{
+							projRec.Shop_Drawings_Status=textValue;
+						}
+					}
+					else if(fieldName == "City")
+					{
+						projRec.City=textValue;
+					}
+					else if(fieldName == "State")
+					{
+						projRec.State=textValue;
+					}
+					else if(fieldName == "Project_Description")
+					{
+						projRec.Project_Description=textValue;
+					}
+					else if(fieldName == "Client_PO_No")
+					{
+						projRec.Client_PO_No=textValue;
+					}
+					else if(fieldName == "Sales_Order_No")
+					{
+						projRec.Sales_Order_No=textValue;
+					}
+					else if(fieldName == "Start_Date")
+					{
+						projRec.Start_Date=dateValue;
+					}
+					else if(fieldName == "Project_Completion_Date")
+					{
+						projRec.Project_Completion_Date=dateValue;
+					}
+					else if(fieldName == "Actual_Completion_Date")
+					{
+						projRec.Actual_Completion_Date=dateValue;
+					}
+					else if(fieldName == "Date_PO_Received")
+					{
+						projRec.Date_PO_Received=dateValue;
+					}
+					else if(fieldName == "Project_Value_PO")
+					{
+						projRec.Project_Value_PO=numberValue;
+					}
+					else if(fieldName == "Estimate_Value_Sub_Total")
+					{
+						projRec.Estimate_Value_Sub_Total=numberValue;
+					}
+					else if(fieldName == "Hardware")
+					{
+						projRec.Hardware=numberValue;
+					}
+					else if(fieldName == "Software")
+					{
+						projRec.Software=numberValue;
+					}
+					else if(fieldName == "Outsourced_Services")
+					{
+						projRec.Outsourced_Services=numberValue;
+					}
+					else if(fieldName == "Logistics")
+					{
+						projRec.Logistics=numberValue;
+					}
+					else if(fieldName == "point0_Services")
+					{
+						projRec.point0_Services=numberValue;
+					}
+					else if(fieldName == "Estimated_Margin")
+					{
+						projRec.Estimated_Margin=numberValue;
+					}
+					else if(fieldName == "Total_Budget_Cost")
+					{
+						projRec.Total_Budget_Cost=numberValue;
+					}
+					else if(fieldName == "Client_Name")
+					{
+						projRec.Client_Name=idValue;
+					}
+					else if(fieldName == "Project_Status")
+					{
+						projRec.Project_Status=idValue;
+					}
+					else if(fieldName == "Currency")
+					{
+						projRec.Currency=idValue;
+					}
+					else if(fieldName == "Accepted_Estimate")
+					{
+						projRec.Accepted_Estimate=idValue;
+					}
+					else if(fieldName == "Project_Registration_Task_List")
+					{
+						regSaveIds = List();
+						regInput = data.get("Project_Registration_Task_List");
+						if(regInput != null)
+						{
+							for each  regSaveId in regInput
+							{
+								regSaveText = ifnull(regSaveId,"").toString();
+								if(regSaveText.isNumber())
+								{
+									regValid = Project_Registration_Task_List[ID == regSaveText.toLong()];
+									if(regValid.count() > 0)
+									{
+										regSaveIds.add(regSaveText.toLong());
+									}
+								}
+							}
+						}
+						projRec.Project_Registration_Task_List=regSaveIds;
+					}
+					else if(fieldName == "Project_Manager")
+					{
+						projRec.Project_Manager=idValue;
+					}
+					else if(fieldName == "Solution_Architect")
+					{
+						projRec.Solution_Architect=idValue;
+					}
+					else if(fieldName == "Finance_Representative")
+					{
+						projRec.Finance_Representative=idValue;
+					}
+					else if(fieldName == "Health_Safety_Manager")
+					{
+						projRec.Health_Safety_Manager=idValue;
+					}
+					else if(fieldName == "Sales_Representative")
+					{
+						projRec.Sales_Representative=idValue;
+					}
+					else if(fieldName == "Lead_Engineer")
+					{
+						projRec.Lead_Engineer=idValue;
+					}
+					else if(fieldName == "Logistics_Coordinator")
+					{
+						projRec.Logistics_Coordinator=idValue;
+					}
+					else if(fieldName == "Sales_Person")
+					{
+						projRec.Sales_Person=idValue;
+					}
+					else if(fieldName == "Project_manager_Approval")
+					{
+						projRec.Project_manager_Approval=idValue;
+					}
+					else if(fieldName == "Country")
+					{
+						countryIds = List();
+						for each  countryId in data.get("Country")
+						{
+							countryIds.add(countryId.toString().toLong());
+						}
+						projRec.Country=countryIds;
+					}
+					else if(fieldName == "Address")
+					{
+						addressData = data.get("Address");
+						projRec.Address.address_line_1=ifnull(addressData.get("address_line_1"),"");
+						projRec.Address.address_line_2=ifnull(addressData.get("address_line_2"),"");
+					}
+				}
+				if(newStatusName != "")
+				{
+					userName = zoho.loginuser;
+					historyUser = Users[Email == zoho.loginuserid];
+					if(historyUser.count() > 0 && ifnull(historyUser.Name,"") != "")
+					{
+						userName = historyUser.Name;
+					}
+					line = zoho.currenttime.toString("dd-MMM-yyyy HH:mm:ss") + " | " + newStatusName + " | " + userName + " | " + ifnull(req.get("reason"),"").toString().trim().replaceAll("[\r\n|]"," ");
+					history = ifnull(projRec.Status_History,"").trim();
+					projRec.Status_History=if(history == "",line,history + "\n" + line);
+				}
+				thisapp.Widget.activity_add(projRec.ID.toString(),"Project",projRec.ID.toString(),ifnull(projRec.Project_Reference,""),before,thisapp.Widget.activity_values("Project",projRec.ID.toString()));
+				if(teamSaveError != "")
+				{
+					response = {"status":"error","code":"TEAM_NOT_SAVED","message":"Project team not saved: " + teamSaveError};
+				}
+				else
+				{
+					response = {"status":"success","id":projRec.ID.toString()};
+				}
+			}
 		}
 	}
 	catch (e)

@@ -1,7 +1,3 @@
-// Widget.project_console(string quo_data) — READ. Custom API: Widget_Project_Console (POST, quo_data).
-// quo_data: {"action":"projects|costing_lines|boq|purchase_orders|po_lines|milestones|budget_review|tasks|plan_milestones|risks|activity", "project_id", "estimate_id", "reference", "po_numbers", "po_ids"}
-// Returns {"status":"success","records":[...]} or {"status":"error","code","message"}.
-// Child records are matched by the Project lookup OR the project's Accepted_Estimate (sync_boq does not fill Project).
 map Widget.project_console(string quo_data)
 {
 	response = Map();
@@ -24,7 +20,6 @@ map Widget.project_console(string quo_data)
 			eid = req.get("estimate_id").toString().toLong();
 		}
 		rows = List();
-		// Projects: all, or one (project_id) with the edit-form extras
 		if(action == "projects")
 		{
 			if(pid > 0)
@@ -68,12 +63,20 @@ map Widget.project_console(string quo_data)
 				}
 				if(projRec.Accepted_Estimate != null)
 				{
-					m.put("Accepted_Estimate",{"ID":projRec.Accepted_Estimate.toString(),"zc_display_value":projRec.Accepted_Estimate.Quote_No});
+					shownQuoteNo = ifnull(projRec.Accepted_Estimate.Quote_No_Books,"").trim();
+					if(shownQuoteNo == "")
+					{
+						shownQuoteNo = ifnull(projRec.Accepted_Estimate.Quote_No,"");
+					}
+					m.put("Accepted_Estimate",{"ID":projRec.Accepted_Estimate.toString(),"zc_display_value":shownQuoteNo});
 				}
-				if(projRec.Project_Registration_Task_List != null)
+				regTicked = List();
+				for each  regItemId in ifnull(projRec.Project_Registration_Task_List,List())
 				{
-					m.put("Project_Registration_Task_List",{"ID":projRec.Project_Registration_Task_List.toString(),"zc_display_value":projRec.Project_Registration_Task_List.Task_Name});
+					regItemRec = Project_Registration_Task_List[ID == regItemId];
+					regTicked.add({"ID":regItemId.toString(),"zc_display_value":ifnull(regItemRec.Task_Name,"")});
 				}
+				m.put("Project_Registration_Task_List",regTicked);
 				if(projRec.Project_Manager != null)
 				{
 					m.put("Project_Manager",{"ID":projRec.Project_Manager.toString(),"zc_display_value":projRec.Project_Manager.Name});
@@ -127,13 +130,53 @@ map Widget.project_console(string quo_data)
 					m.put("Health_Safety_Manager_Signature",ifnull(projRec.Health_Safety_Manager_Signature,""));
 					m.put("Sales_Signature",ifnull(projRec.Sales_Signature,""));
 					m.put("Project_manager_Signature",ifnull(projRec.Project_manager_Signature,""));
+					m.put("Solution_Architect_Signature",ifnull(projRec.Solution_Architect_Signature,""));
+					m.put("Warranty_Document",ifnull(projRec.Warranty_Document,""));
+					m.put("Registration_Notes",ifnull(projRec.Registration_Notes,""));
+					m.put("Shop_Drawings_Status",ifnull(projRec.Shop_Drawings_Status,""));
+					attendeeCount = 0;
+					for each  attendeeRow in projRec.Meeting_Attendees
+					{
+						attendeeCount = attendeeCount + 1;
+					}
+					teamCount = 0;
+					for each  teamCountRow in projRec.Pro
+					{
+						teamCount = teamCount + 1;
+					}
+					contactCount = 0;
+					for each  contactCountRow in projRec.Projects_contacts
+					{
+						contactCount = contactCount + 1;
+					}
+					termCount = 0;
+					for each  termCountRow in projRec.Payment_Terms_Agreed
+					{
+						termCount = termCount + 1;
+					}
+					m.put("Meeting_Attendees_Count",attendeeCount);
+					m.put("Pro_Count",teamCount);
+					m.put("Projects_contacts_Count",contactCount);
+					m.put("Payment_Terms_Agreed_Count",termCount);
 				}
 				rows.add(m);
 			}
 		}
-		// Cost lines = asset & network register (Assets, Deployment tabs)
 		else if(action == "costing_lines")
 		{
+			costCountryIdx = 0;
+			costProj = Project[ID == pid];
+			if(costProj.count() > 0)
+			{
+				for each  costCountryId in ifnull(costProj.Country,List())
+				{
+					costCountryRec = Country[ID == costCountryId];
+					if(costCountryIdx == 0 && costCountryRec.count() > 0)
+					{
+						costCountryIdx = ifnull(costCountryRec.Index_field,0);
+					}
+				}
+			}
 			for each  lineRec in Costing_Lineitem[Project == pid || Cost_Analysis == eid] sort by Added_Time
 			{
 				m = {"ID":lineRec.ID.toString(),"Work_Package":ifnull(lineRec.Work_Package,""),"Model":ifnull(lineRec.Model,""),"Item_Description":ifnull(lineRec.Item_Description,""),"Quantity":ifnull(lineRec.Quantity,0),"Total_Cost":ifnull(lineRec.Total_Cost,0),"Total_Price":ifnull(lineRec.Total_Price,0),"Total_Profit":ifnull(lineRec.Total_Profit,0),"Notes":ifnull(lineRec.Notes,""),"Serial_Number":ifnull(lineRec.Serial_Number,""),"MAC_Address_Control":ifnull(lineRec.MAC_Address_Control,""),"MAC_Address_Dante":ifnull(lineRec.MAC_Address_Dante,""),"Provision":ifnull(lineRec.Provision,""),"Outlet_GOP_No":ifnull(lineRec.Outlet_GOP_No,""),"Networked":ifnull(lineRec.Networked,false),"Switch_Ref":ifnull(lineRec.Switch_Ref,""),"Port_No":ifnull(lineRec.Port_No,""),"POE":ifnull(lineRec.POE,""),"VLAN":ifnull(lineRec.VLAN,""),"IP_Address":ifnull(lineRec.IP_Address,""),"Subnet_Mask":ifnull(lineRec.Subnet_Mask,""),"Host_Name":ifnull(lineRec.Host_Name,""),"Gateway":ifnull(lineRec.Gateway,""),"DNS_Server_1":ifnull(lineRec.DNS_Server_1,""),"DNS_Server_2":ifnull(lineRec.DNS_Server_2,"")};
@@ -148,6 +191,26 @@ map Widget.project_console(string quo_data)
 				if(lineRec.Vendor != null)
 				{
 					m.put("Vendor",lineRec.Vendor.Vendor_Name);
+				}
+				else if(lineRec.SKU != null)
+				{
+					costProduct = Product[ID == lineRec.SKU];
+					if(costProduct.count() > 0)
+					{
+						costVendorId = costProduct.Vendor_UAE;
+						if(costCountryIdx == 2)
+						{
+							costVendorId = costProduct.Vendor_SAR;
+						}
+						if(costVendorId != null)
+						{
+							costVendorRec = Vendors[ID == costVendorId];
+							if(costVendorRec.count() > 0)
+							{
+								m.put("Vendor",ifnull(costVendorRec.Vendor_Name,""));
+							}
+						}
+					}
 				}
 				if(lineRec.Category != null)
 				{
@@ -180,7 +243,6 @@ map Widget.project_console(string quo_data)
 				rows.add(m);
 			}
 		}
-		// BOQ (BOQ, Procurement tabs)
 		else if(action == "boq")
 		{
 			reference = ifnull(req.get("reference"),"").toString().trim();
@@ -210,6 +272,36 @@ map Widget.project_console(string quo_data)
 				if(boqRec.Vendors != null)
 				{
 					m.put("Vendors",{"ID":boqRec.Vendors.toString(),"zc_display_value":boqRec.Vendors.Vendor_Name});
+				}
+				else if(boqRec.SKU != null)
+				{
+					boqCountryIdx = 0;
+					if(boqRec.Country != null)
+					{
+						boqCountryRec = Country[ID == boqRec.Country];
+						if(boqCountryRec.count() > 0)
+						{
+							boqCountryIdx = ifnull(boqCountryRec.Index_field,0);
+						}
+					}
+					boqProduct = Product[ID == boqRec.SKU];
+					if(boqProduct.count() > 0)
+					{
+						boqVendorId = boqProduct.Vendor_UAE;
+						if(boqCountryIdx == 2)
+						{
+							boqVendorId = boqProduct.Vendor_SAR;
+						}
+						if(boqVendorId != null)
+						{
+							boqVendorRec = Vendors[ID == boqVendorId];
+							if(boqVendorRec.count() > 0)
+							{
+								m.put("Vendors",{"ID":boqVendorId.toString(),"zc_display_value":ifnull(boqVendorRec.Vendor_Name,"")});
+								m.put("Vendor_From_Product",true);
+							}
+						}
+					}
 				}
 				if(boqRec.Category != null)
 				{
@@ -251,20 +343,49 @@ map Widget.project_console(string quo_data)
 				rows.add(m);
 			}
 		}
-		// Purchase orders named on the project's BOQ lines (BOQ.PO = Purchase_Order.PO_No)
 		else if(action == "purchase_orders")
 		{
 			poNumbers = ifnull(req.get("po_numbers"),List());
+			poIdList = List();
+			if(pid > 0)
+			{
+				for each  projPoRec in Purchase_Order[Project_reference == pid]
+				{
+					poIdList.add(projPoRec.ID);
+				}
+			}
 			if(poNumbers.size() > 0)
 			{
-				for each  poRec in Purchase_Order[PO_No in poNumbers]
+				for each  numberPoRec in Purchase_Order[PO_No in poNumbers]
+				{
+					if(!poIdList.contains(numberPoRec.ID))
+					{
+						poIdList.add(numberPoRec.ID);
+					}
+				}
+				for each  booksNumberPoRec in Purchase_Order[Purchase_Order_Books_No in poNumbers]
+				{
+					if(!poIdList.contains(booksNumberPoRec.ID))
+					{
+						poIdList.add(booksNumberPoRec.ID);
+					}
+				}
+			}
+			if(poIdList.size() > 0)
+			{
+				for each  poRec in Purchase_Order[ID in poIdList] sort by PO_No
 				{
 					booksPoId = ifnull(poRec.UAE_ZB_ID,"");
 					if(booksPoId == "")
 					{
 						booksPoId = ifnull(poRec.SAR_ZB_ID,"");
 					}
-					m = {"ID":poRec.ID.toString(),"PO_No":ifnull(poRec.PO_No,""),"Reference":ifnull(poRec.Reference,""),"Sub_Total":ifnull(poRec.Sub_Total,0),"Discount":ifnull(poRec.Discount,0),"Total_Cost":ifnull(poRec.Total_Cost,0),"Issued_By":ifnull(poRec.Added_User,""),"Books_ID":booksPoId};
+					poShownNo = ifnull(poRec.Purchase_Order_Books_No,"").trim();
+					if(poShownNo == "")
+					{
+						poShownNo = ifnull(poRec.PO_No,"");
+					}
+					m = {"ID":poRec.ID.toString(),"PO_No":poShownNo,"Creator_PO_No":ifnull(poRec.PO_No,""),"Reference":ifnull(poRec.Reference,""),"Sub_Total":ifnull(poRec.Sub_Total,0),"Discount":ifnull(poRec.Discount,0),"Total_Cost":ifnull(poRec.Total_Cost,0),"Issued_By":ifnull(poRec.Added_User,""),"Books_ID":booksPoId,"Books_Synced":booksPoId != "","Terms_Conditions":ifnull(poRec.Terms_Conditions,""),"Notes":ifnull(poRec.Notes,""),"PR_All_Received":ifnull(poRec.PR_All_Received,false)};
 					if(poRec.PO_Status != null)
 					{
 						m.put("PO_Status",poRec.PO_Status.Status_Name);
@@ -280,6 +401,15 @@ map Widget.project_console(string quo_data)
 					if(poRec.Vendor_Name != null)
 					{
 						m.put("Vendor_Name",poRec.Vendor_Name.Vendor_Name);
+						m.put("Vendor_ID",poRec.Vendor_Name.toString());
+					}
+					if(poRec.Country != null)
+					{
+						m.put("Country_ID",poRec.Country.toString());
+					}
+					if(poRec.Warehouse != null)
+					{
+						m.put("Warehouse_ID",poRec.Warehouse.toString());
 					}
 					boqIds = List();
 					for each  boqId in ifnull(poRec.BOQ,List())
@@ -287,7 +417,6 @@ map Widget.project_console(string quo_data)
 						boqIds.add(boqId.toString());
 					}
 					m.put("BOQ",boqIds);
-					m.put("Books_Synced",ifnull(poRec.UAE_ZB_ID,"") != "" || ifnull(poRec.SAR_ZB_ID,"") != "");
 					rows.add(m);
 				}
 			}
@@ -301,17 +430,396 @@ map Widget.project_console(string quo_data)
 			}
 			if(poIds.size() > 0)
 			{
-				for each  poLineRec in PO_Line_Items[Purchase_Order in poIds]
+				for each  poLineRec in PO_Line_Items[Purchase_Order in poIds && is_PR == false && is_DN == false]
 				{
-					m = {"ID":poLineRec.ID.toString(),"Item_Description":ifnull(poLineRec.Item_Description,""),"Quantity":ifnull(poLineRec.Quantity,0),"Rate":ifnull(poLineRec.Rate,0),"Amount":ifnull(poLineRec.Amount,0),"Quantity_Received":ifnull(poLineRec.Quantity_Received,0),"Quantity_to_be_Received":ifnull(poLineRec.Quantity_to_be_Received,0),"Received":ifnull(poLineRec.Received,false)};
+					m = {"ID":poLineRec.ID.toString(),"Item_Description":ifnull(poLineRec.Item_Description,""),"Quantity":ifnull(poLineRec.Quantity,0),"Rate":ifnull(poLineRec.Rate,0),"Amount":ifnull(poLineRec.Amount,0),"Quantity_Received":ifnull(poLineRec.Quantity_Received,0),"Quantity_to_be_Received":ifnull(poLineRec.Quantity_to_be_Received,0),"Received":ifnull(poLineRec.Received,false),"Already_Delivered":ifnull(poLineRec.Already_Delivered,0),"Qty_to_Deliver":ifnull(poLineRec.Qty_to_Deliver,0),"WP_ID":ifnull(poLineRec.WP_ID,""),"Division":ifnull(poLineRec.Division,"")};
 					if(poLineRec.Purchase_Order != null)
 					{
-						m.put("Purchase_Order",{"ID":poLineRec.Purchase_Order.toString(),"zc_display_value":poLineRec.Purchase_Order.PO_No});
+						lineShownNo = ifnull(poLineRec.Purchase_Order.Purchase_Order_Books_No,"").trim();
+						if(lineShownNo == "")
+						{
+							lineShownNo = ifnull(poLineRec.Purchase_Order.PO_No,"");
+						}
+						m.put("Purchase_Order",{"ID":poLineRec.Purchase_Order.toString(),"zc_display_value":lineShownNo});
 					}
 					if(poLineRec.Item_Name != null)
 					{
 						m.put("Item_Name",{"ID":poLineRec.Item_Name.toString(),"zc_display_value":poLineRec.Item_Name.Item_Name});
+						productRec = Product[ID == poLineRec.Item_Name];
+						if(productRec.count() > 0)
+						{
+							m.put("Warranty_Months",ifnull(productRec.Warranty,0) * 12);
+						}
 					}
+					if(poLineRec.BOQ != null)
+					{
+						m.put("BOQ",poLineRec.BOQ.toString());
+					}
+					if(poLineRec.Estimate_Line_ID != null)
+					{
+						m.put("Estimate_Line_ID",poLineRec.Estimate_Line_ID.toString());
+					}
+					if(poLineRec.Store_Warehouse != null)
+					{
+						m.put("Store_Warehouse",{"ID":poLineRec.Store_Warehouse.toString(),"zc_display_value":poLineRec.Store_Warehouse.Warehouse_Name});
+					}
+					m.put("Reserved_Qty",thisapp.Delivery.Open_Reserved(poLineRec.ID,0));
+					stockPlaces = List();
+					stockCopyIds = List();
+					for each  stockCopyRec in PO_Line_Items[Parent_Line_ID == poLineRec.ID && is_PR == true]
+					{
+						stockCopyIds.add(stockCopyRec.ID);
+					}
+					if(stockCopyIds.size() > 0)
+					{
+						for each  placeRec in Storage[PR_Line in stockCopyIds] sort by ID
+						{
+							placeLeft = ifnull(placeRec.Qty,0) - ifnull(placeRec.Delivered_Qty,0);
+							if(placeLeft > 0)
+							{
+								placeParts = List();
+								if(placeRec.Warehouse != null)
+								{
+									placeParts.add(ifnull(placeRec.Warehouse.Warehouse_Name,""));
+								}
+								if(placeRec.Rack != null)
+								{
+									placeParts.add(ifnull(placeRec.Rack.Rack_Code,""));
+								}
+								if(placeRec.Segment != null)
+								{
+									placeParts.add(ifnull(placeRec.Segment.Segment_Code,""));
+								}
+								if(ifnull(placeRec.Position,"") != "")
+								{
+									placeParts.add(placeRec.Position);
+								}
+								if(ifnull(placeRec.Position_Note,"") != "")
+								{
+									placeParts.add(placeRec.Position_Note);
+								}
+								placePrNo = "";
+								placeReceived = "";
+								if(placeRec.Purchase_Receive != null)
+								{
+									placePrNo = ifnull(placeRec.Purchase_Receive.Purchase_Receive_Books_No,"").trim();
+									if(placePrNo == "")
+									{
+										placePrNo = ifnull(placeRec.Purchase_Receive.PR_No,"");
+									}
+									if(placeRec.Purchase_Receive.Receive_Date != null)
+									{
+										placeReceived = placeRec.Purchase_Receive.Receive_Date.toString("dd-MMM-yyyy");
+									}
+								}
+								placeLabel = "Not placed yet";
+								if(placeParts.size() > 0)
+								{
+									placeLabel = placeParts.toString(" · ");
+								}
+								placeWarehouse = "";
+								if(placeRec.Warehouse != null)
+								{
+									placeWarehouse = ifnull(placeRec.Warehouse.Warehouse_Name,"");
+								}
+								placeSpot = List();
+								placeRackCode = "";
+								placeBayLetter = "";
+								placeLevel = "";
+								placeSide = "";
+								placePallet = "";
+								if(placeRec.Rack != null)
+								{
+									placeRackCode = ifnull(placeRec.Rack.Rack_Code,"");
+									placeSpot.add(placeRackCode);
+								}
+								if(placeRec.Segment != null)
+								{
+									placePallet = ifnull(placeRec.Segment.Segment_Code,"");
+									placeBayLetter = ifnull(placeRec.Segment.Bay_Letter,"").toString();
+									placeLevel = ifnull(placeRec.Segment.Level,"").toString();
+									placeSide = ifnull(placeRec.Segment.Side,"").toString();
+									placeSpot.add(placePallet);
+								}
+								if(ifnull(placeRec.Position,"") != "")
+								{
+									placeSpot.add(placeRec.Position);
+								}
+								placeSerials = List();
+								for each  placeSerialRec in GRN_Serial[Storage == placeRec.ID] sort by ID
+								{
+									if(ifnull(placeSerialRec.Serial_Status,"") != "Delivered")
+									{
+										if(ifnull(placeSerialRec.Serial_No,"") != "")
+										{
+											placeSerials.add(placeSerialRec.Serial_No);
+										}
+									}
+								}
+								stockPlaces.add({"ID":placeRec.ID.toString(),"Label":placeLabel,"Qty":placeLeft,"PR_No":placePrNo,"Warehouse":placeWarehouse,"Location":placeSpot.toString(" · "),"Serials":placeSerials,"Received":placeReceived,"Status":ifnull(placeRec.Stock_Status,""),"Rack":placeRackCode,"Bay":placeBayLetter,"Level":placeLevel,"Side":placeSide,"Pallet":placePallet});
+							}
+						}
+					}
+					m.put("Stock_Locations",stockPlaces);
+					dnLinkId = 0;
+					for each  dnCopyRec in PO_Line_Items[Parent_Line_ID == poLineRec.ID && is_DN == true] sort by Added_Time
+					{
+						if(dnCopyRec.Delivery_Note != null)
+						{
+							dnLinkId = dnCopyRec.Delivery_Note;
+						}
+					}
+					if(dnLinkId == 0 && poLineRec.Delivery_Note != null)
+					{
+						dnLinkId = poLineRec.Delivery_Note;
+					}
+					if(dnLinkId != 0)
+					{
+						dnLineRec = Delivery_Note[ID == dnLinkId];
+						dnStatusName = "";
+						if(dnLineRec.Status != null)
+						{
+							dnStatusName = ifnull(dnLineRec.Status.Status_Name,"");
+						}
+						m.put("Delivery_Note",{"ID":dnLinkId.toString(),"zc_display_value":ifnull(dnLineRec.DN_No,""),"Status":dnStatusName});
+					}
+					rows.add(m);
+				}
+			}
+		}
+		else if(action == "delivery_notes")
+		{
+			for each  dnRec in Delivery_Note[Project == pid] sort by Added_Time desc
+			{
+				booksDnId = ifnull(dnRec.UAE_ZB_ID,"");
+				if(booksDnId == "")
+				{
+					booksDnId = ifnull(dnRec.SAR_ZB_ID,"");
+				}
+				m = {"ID":dnRec.ID.toString(),"DN_No":ifnull(dnRec.DN_No,""),"Reference":ifnull(dnRec.Reference,""),"Challan_Type":ifnull(dnRec.Challan_Type,""),"Vehicle_No":ifnull(dnRec.Vehicle_No,""),"Driver_Name":ifnull(dnRec.Driver_Name,""),"Received_By":ifnull(dnRec.Received_By,""),"Customer_Notes":ifnull(dnRec.Customer_Notes,""),"Total":ifnull(dnRec.Total,0),"Books_ID":booksDnId,"Attachments":ifnull(dnRec.Attachments,List())};
+				if(dnRec.DN_Date != null)
+				{
+					m.put("DN_Date",dnRec.DN_Date.toString("dd-MMM-yyyy"));
+				}
+				if(dnRec.Delivered_Date != null)
+				{
+					m.put("Delivered_Date",dnRec.Delivered_Date.toString("dd-MMM-yyyy"));
+				}
+				if(dnRec.Status != null)
+				{
+					m.put("Status",{"ID":dnRec.Status.toString(),"zc_display_value":dnRec.Status.Status_Name,"Index":dnRec.Status.Index_field});
+				}
+				if(dnRec.Warehouse != null)
+				{
+					m.put("Warehouse",{"ID":dnRec.Warehouse.toString(),"zc_display_value":dnRec.Warehouse.Warehouse_Name});
+				}
+				dnLines = List();
+				for each  dnItemRec in PO_Line_Items[Delivery_Note == dnRec.ID]
+				{
+					dnLineId = dnItemRec.ID.toString();
+					if(dnItemRec.Parent_Line_ID != null)
+					{
+						dnLineId = dnItemRec.Parent_Line_ID.toString();
+					}
+					dnLine = {"ID":dnLineId,"Qty_to_Deliver":ifnull(dnItemRec.Qty_to_Deliver,0),"DN_Amount":ifnull(dnItemRec.DN_Amount,0),"Item_Description":ifnull(dnItemRec.Item_Description,"")};
+					dnLocations = List();
+					if(dnItemRec.Parent_PR_ID != null)
+					{
+						dnPrRec = Purchase_Receive[ID == dnItemRec.Parent_PR_ID];
+						if(dnPrRec.count() > 0)
+						{
+							dnLine.put("PR_ID",dnPrRec.ID.toString());
+							dnShownPrNo = ifnull(dnPrRec.Purchase_Receive_Books_No,"").trim();
+							if(dnShownPrNo == "")
+							{
+								dnShownPrNo = ifnull(dnPrRec.PR_No,"");
+							}
+							dnLine.put("PR_No",dnShownPrNo);
+						}
+						if(dnItemRec.Parent_Line_ID != null)
+						{
+							dnCopyIds = List();
+							for each  dnCopyRec in PO_Line_Items[Parent_Line_ID == dnItemRec.Parent_Line_ID && Purchase_Receive == dnItemRec.Parent_PR_ID && is_PR == true]
+							{
+								dnCopyIds.add(dnCopyRec.ID);
+							}
+							if(dnCopyIds.size() > 0)
+							{
+								for each  dnStockRec in Storage[PR_Line in dnCopyIds] sort by ID
+								{
+									dnPlace = List();
+									if(dnStockRec.Warehouse != null)
+									{
+										dnPlace.add(ifnull(dnStockRec.Warehouse.Warehouse_Name,""));
+									}
+									dnLabel = ifnull(dnStockRec.Location_Label,"").trim();
+									if(dnStockRec.Rack != null)
+									{
+										if(dnStockRec.Segment == null)
+										{
+											dnPlace.add(ifnull(dnStockRec.Rack.Rack_Code,""));
+										}
+									}
+									if(dnLabel != "")
+									{
+										dnPlace.add(dnLabel);
+									}
+									if(dnPlace.size() > 0)
+									{
+										dnLocations.add(dnPlace.toString(" · "));
+									}
+								}
+							}
+						}
+					}
+					dnLine.put("Locations",dnLocations);
+					dnLines.add(dnLine);
+				}
+				m.put("Lines",dnLines);
+				rows.add(m);
+			}
+		}
+		else if(action == "purchase_receives")
+		{
+			prPoIds = List();
+			for each  prPoId in ifnull(req.get("po_ids"),List())
+			{
+				prPoIds.add(prPoId.toString().toLong());
+			}
+			if(prPoIds.size() > 0)
+			{
+				for each  prRec in Purchase_Receive[Purchase_Order in prPoIds] sort by Added_Time desc
+				{
+					booksPrId = ifnull(prRec.UAE_ZB_ID,"");
+					if(booksPrId == "")
+					{
+						booksPrId = ifnull(prRec.SAR_ZB_ID,"");
+					}
+					listedPrNo = ifnull(prRec.Purchase_Receive_Books_No,"").trim();
+					if(listedPrNo == "")
+					{
+						listedPrNo = ifnull(prRec.PR_No,"");
+					}
+					m = {"ID":prRec.ID.toString(),"PR_No":listedPrNo,"Creator_PR_No":ifnull(prRec.PR_No,""),"Notes":ifnull(prRec.Notes,""),"Books_ID":booksPrId,"Attachments":ifnull(prRec.Attachments,List())};
+					if(prRec.Delivery_Note != null)
+					{
+						prDnRec = Delivery_Note[ID == prRec.Delivery_Note];
+						if(prDnRec.count() > 0)
+						{
+							prDnMap = {"ID":prDnRec.ID.toString(),"DN_No":ifnull(prDnRec.DN_No,""),"Received_By":ifnull(prDnRec.Received_By,""),"Status":""};
+							if(prDnRec.Status != null)
+							{
+								prDnMap.put("Status",ifnull(prDnRec.Status.Status_Name,""));
+							}
+							if(prDnRec.DN_Date != null)
+							{
+								prDnMap.put("DN_Date",prDnRec.DN_Date.toString("dd-MMM-yyyy"));
+							}
+							if(prDnRec.Delivered_Date != null)
+							{
+								prDnMap.put("Delivered_Date",prDnRec.Delivered_Date.toString("dd-MMM-yyyy"));
+							}
+							m.put("Delivery_Note",prDnMap);
+						}
+					}
+					if(prRec.Receive_Date != null)
+					{
+						m.put("Receive_Date",prRec.Receive_Date.toString("dd-MMM-yyyy"));
+					}
+					if(prRec.Purchase_Order != null)
+					{
+						prShownNo = ifnull(prRec.Purchase_Order.Purchase_Order_Books_No,"").trim();
+						if(prShownNo == "")
+						{
+							prShownNo = ifnull(prRec.Purchase_Order.PO_No,"");
+						}
+						m.put("Purchase_Order",{"ID":prRec.Purchase_Order.toString(),"zc_display_value":prShownNo});
+					}
+					if(prRec.Vendor != null)
+					{
+						m.put("Vendor",prRec.Vendor.Vendor_Name);
+					}
+					prLines = List();
+					for each  prItemRec in PO_Line_Items[Purchase_Receive == prRec.ID && is_PR == true]
+					{
+						prLine = {"ID":prItemRec.ID.toString(),"Quantity_Received":ifnull(prItemRec.Quantity_Received,0)};
+						if(prItemRec.Parent_Line_ID != null)
+						{
+							prLine.put("Parent_Line_ID",prItemRec.Parent_Line_ID.toString());
+						}
+						if(prItemRec.Store_Warehouse != null)
+						{
+							prLine.put("Store_Warehouse",prItemRec.Store_Warehouse.Warehouse_Name);
+						}
+						if(prItemRec.Store_Rack != null)
+						{
+							prLine.put("Store_Rack",prItemRec.Store_Rack.Rack_Code);
+						}
+						if(prItemRec.Store_Segment != null)
+						{
+							prLine.put("Store_Segment",prItemRec.Store_Segment.Segment_Code);
+						}
+						prLine.put("Item",ifnull(prItemRec.Item_Description,""));
+						if(prItemRec.Item_Name != null)
+						{
+							prLine.put("Item",ifnull(prItemRec.Item_Name.Item_Name,ifnull(prItemRec.Item_Description,"")));
+						}
+						lineLocations = List();
+						linePlaces = List();
+						lineStoreNo = 0;
+						for each  lineStorage in Storage[PR_Line == prItemRec.ID] sort by ID
+						{
+							linePlace = {"ID":lineStorage.ID.toString(),"Label":ifnull(lineStorage.Location_Label,""),"Qty":ifnull(lineStorage.Qty,0),"Rack":"","Bay":"","Level":"","Side":"","Pallet":""};
+							if(lineStorage.Rack != null)
+							{
+								linePlace.put("Rack",ifnull(lineStorage.Rack.Rack_Code,""));
+							}
+							if(lineStorage.Segment != null)
+							{
+								linePlace.put("Pallet",ifnull(lineStorage.Segment.Segment_Code,""));
+								linePlace.put("Bay",ifnull(lineStorage.Segment.Bay_Letter,"").toString());
+								linePlace.put("Level",ifnull(lineStorage.Segment.Level,"").toString());
+								linePlace.put("Side",ifnull(lineStorage.Segment.Side,"").toString());
+							}
+							linePlaces.add(linePlace);
+							if(lineStoreNo == 0)
+							{
+								prLine.put("Position",ifnull(lineStorage.Position,""));
+								prLine.put("Position_Note",ifnull(lineStorage.Position_Note,""));
+								prLine.put("Location_Label",ifnull(lineStorage.Location_Label,""));
+							}
+							lineStoreNo = lineStoreNo + 1;
+							lineLocations.add(ifnull(lineStorage.Location_Label,""));
+						}
+						prLine.put("Locations",lineLocations);
+						prLine.put("Places",linePlaces);
+						lineSerialNos = List();
+						lineSerialUnits = List();
+						for each  lineSerialRec in GRN_Serial[PO_Line == prItemRec.ID && Serial_No != ""] sort by ID
+						{
+							lineSerialNos.add(lineSerialRec.Serial_No);
+							lineUnit = {"Serial_No":lineSerialRec.Serial_No,"MAC":ifnull(lineSerialRec.MAC_Address,""),"Status":ifnull(lineSerialRec.Serial_Status,""),"Storage_ID":""};
+							if(lineSerialRec.Storage != null)
+							{
+								lineUnit.put("Storage_ID",lineSerialRec.Storage.toString());
+							}
+							lineSerialUnits.add(lineUnit);
+						}
+						prLine.put("Serials",lineSerialNos.size());
+						prLine.put("Serial_Nos",lineSerialNos);
+						prLine.put("Serial_Units",lineSerialUnits);
+						lineToSite = ifnull(prItemRec.Already_Delivered,0) > 0;
+						if(prItemRec.Store_Warehouse == null)
+						{
+							if(lineStoreNo == 0)
+							{
+								lineToSite = true;
+							}
+						}
+						prLine.put("Direct_To_Site",lineToSite);
+						prLines.add(prLine);
+					}
+					m.put("Lines",prLines);
 					rows.add(m);
 				}
 			}
@@ -335,7 +843,48 @@ map Widget.project_console(string quo_data)
 				rows.add(m);
 			}
 		}
-		// Tasks and milestones (Task.Type_field) of the project
+		else if(action == "contacts")
+		{
+			for each  personRec in Contact_Persons[Project == pid] sort by Added_Time
+			{
+				personFirst = "";
+				personLast = "";
+				if(personRec.Name != null)
+				{
+					personFirst = ifnull(personRec.Name.first_name,"");
+					personLast = ifnull(personRec.Name.last_name,"");
+				}
+				rows.add({"ID":personRec.ID.toString(),"First_Name":personFirst,"Last_Name":personLast,"Email":ifnull(personRec.Email,""),"Mobile":ifnull(personRec.Mobile,""),"Work_Phone":ifnull(personRec.Work_Phone,""),"Designation":ifnull(personRec.Designation,"")});
+			}
+		}
+		else if(action == "attendees")
+		{
+			for each  attRec in Meeting_Attendee[Project == pid] sort by Added_Time
+			{
+				attUserId = "";
+				attUserName = "";
+				if(attRec.Employee_Name != null)
+				{
+					attUserId = attRec.Employee_Name.toString();
+					attUserName = ifnull(attRec.Employee_Name.Name,"");
+				}
+				rows.add({"ID":attRec.ID.toString(),"User_ID":attUserId,"User_Name":attUserName,"Attendance":ifnull(attRec.Attendance,"")});
+			}
+		}
+		else if(action == "outsourced")
+		{
+			for each  outRec in Project_Contact[Project == pid] sort by Added_Time
+			{
+				outFirst = "";
+				outLast = "";
+				if(outRec.Name != null)
+				{
+					outFirst = ifnull(outRec.Name.first_name,"");
+					outLast = ifnull(outRec.Name.last_name,"");
+				}
+				rows.add({"ID":outRec.ID.toString(),"First_Name":outFirst,"Last_Name":outLast,"Contact_Type":ifnull(outRec.Contact_Type,""),"Company":ifnull(outRec.Company,""),"Email":ifnull(outRec.Email,""),"Phone_Number":ifnull(outRec.Phone_Number,""),"Scope_of_Work":ifnull(outRec.Scope_of_Work,""),"Sub_Contract_Value_Agreed":ifnull(outRec.Sub_Contract_Value_Agreed,0)});
+			}
+		}
 		else if(action == "tasks")
 		{
 			for each  taskRec in Task[Project_Name == pid] sort by Task_Start_Date
@@ -365,6 +914,10 @@ map Widget.project_console(string quo_data)
 				{
 					m.put("Parent_Task",{"ID":taskRec.Parent_Task.toString(),"zc_display_value":taskRec.Parent_Task.Task_Name});
 				}
+				if(taskRec.Milestone != null)
+				{
+					m.put("Milestone",{"ID":taskRec.Milestone.toString(),"zc_display_value":ifnull(taskRec.Milestone.Milestone_Name,"")});
+				}
 				owners = List();
 				for each  ownerId in ifnull(taskRec.Owners,List())
 				{
@@ -381,7 +934,6 @@ map Widget.project_console(string quo_data)
 				rows.add(m);
 			}
 		}
-		// Milestone form (Project lookup): planned milestones of the project
 		else if(action == "plan_milestones")
 		{
 			for each  planRec in Milestone[Project == pid] sort by Milestone_No
@@ -395,14 +947,9 @@ map Widget.project_console(string quo_data)
 				{
 					m.put("Owner",{"ID":planRec.Owner.toString(),"zc_display_value":planRec.Owner.Name});
 				}
-				if(planRec.Task_List != null)
-				{
-					m.put("Task_List",{"ID":planRec.Task_List.toString(),"zc_display_value":planRec.Task_List.Task_Name});
-				}
 				rows.add(m);
 			}
 		}
-		// Project_Risk form (Risk Register)
 		else if(action == "risks")
 		{
 			for each  riskRec in Project_Risk[Project_Name == pid] sort by Risk_ID
@@ -424,24 +971,133 @@ map Widget.project_console(string quo_data)
 				rows.add(m);
 			}
 		}
-		// Activity_Stream (who changed what and when), newest first; record_id narrows it to one record
 		else if(action == "activity")
 		{
 			recordId = ifnull(req.get("record_id"),"").toString();
+			actLogRec = Activity_Stream[Project == pid && Record_ID == "LOG"];
+			if(actLogRec.count() > 0)
+			{
+				for each  actLogRow in actLogRec.Activity_data
+				{
+					if(recordId == "" || ifnull(actLogRow.Activity_Record_ID,"") == recordId)
+					{
+						m = {"ID":actLogRow.ID.toString(),"Module":ifnull(actLogRow.Activity_Module,""),"Record_ID":ifnull(actLogRow.Activity_Record_ID,""),"Record_Name":ifnull(actLogRow.Activity_Record_Name,""),"Action":ifnull(actLogRow.Activity_Action,""),"Field_Name":ifnull(actLogRow.Activity_Field,""),"Old_Value":ifnull(actLogRow.Activity_Old_Value,""),"New_Value":ifnull(actLogRow.Activity_New_Value,""),"Changed_By":ifnull(actLogRow.Activity_By,"")};
+						if(actLogRow.Activity_On != null)
+						{
+							m.put("Changed_On",actLogRow.Activity_On.toString("dd-MMM-yyyy HH:mm:ss"));
+						}
+						rows.add(m);
+					}
+				}
+			}
 			if(recordId != "")
 			{
 				activityList = Activity_Stream[Project == pid && Record_ID == recordId] sort by Added_Time desc range from 1 to 300;
 			}
 			else
 			{
-				activityList = Activity_Stream[Project == pid] sort by Added_Time desc range from 1 to 300;
+				activityList = Activity_Stream[Project == pid && Record_ID != "LOG"] sort by Added_Time desc range from 1 to 300;
 			}
 			for each  activityRec in activityList
 			{
 				m = {"ID":activityRec.ID.toString(),"Module":ifnull(activityRec.Module,""),"Record_ID":ifnull(activityRec.Record_ID,""),"Record_Name":ifnull(activityRec.Record_Name,""),"Action":ifnull(activityRec.Action_field,""),"Field_Name":ifnull(activityRec.Field_Name,""),"Old_Value":ifnull(activityRec.Old_Value,""),"New_Value":ifnull(activityRec.New_Value,""),"Changed_By":ifnull(activityRec.Changed_By,"")};
-				// Changed_On is a Date field; the exact time is the record's Added_Time
 				m.put("Changed_On",activityRec.Added_Time.toString("dd-MMM-yyyy HH:mm:ss"));
 				rows.add(m);
+			}
+		}
+		else if(action == "po_payments")
+		{
+			payPoIds = List();
+			for each  payPoId in ifnull(req.get("po_ids"),List())
+			{
+				if(payPoId.toString().isNumber())
+				{
+					payPoIds.add(payPoId.toString().toLong());
+				}
+			}
+			if(payPoIds.size() > 0)
+			{
+				for each  payRec in Payment_Made[Purchase_Order in payPoIds] sort by Payment_Date desc
+				{
+					m = {"ID":payRec.ID.toString(),"Purchase_Order":ifnull(payRec.Purchase_Order,"").toString(),"Amount":ifnull(payRec.Amount,0),"Reference_No":ifnull(payRec.Reference_No,""),"Payment_Note":ifnull(payRec.Payment_Note,""),"Payment_Mode":ifnull(payRec.Payment_Mode,""),"Books_No":ifnull(payRec.Payment_Made_Books_No,"")};
+					if(payRec.Payment_Date != null)
+					{
+						m.put("Payment_Date",payRec.Payment_Date.toString("dd-MMM-yyyy"));
+					}
+					rows.add(m);
+				}
+			}
+		}
+		else if(action == "file")
+		{
+			fileReport = ifnull(req.get("report"),"").toString();
+			fileField = ifnull(req.get("field"),"").toString();
+			fileIdText = ifnull(req.get("id"),"").toString();
+			filePathText = ifnull(req.get("filepath"),"").toString().trim();
+			fileFields = {"All_Delivery_Notes":"Attachments","Purchase_Receive_Report":"Attachments","All_Task_Files":"File_field","All_Projects":"PO_Document"};
+			projFileFields = {"PO_Document","Warranty_Document","Sales_Signature","Project_manager_Signature","Health_Safety_Manager_Signature","Solution_Architect_Signature"};
+			fileFieldOk = false;
+			if(fileReport == "All_Projects")
+			{
+				fileFieldOk = projFileFields.contains(fileField);
+			}
+			else if(fileFields.containKey(fileReport))
+			{
+				fileFieldOk = fileFields.get(fileReport) == fileField;
+			}
+			filePathOk = filePathText != "";
+			if(fileField.endsWith("_Signature"))
+			{
+				filePathOk = true;
+			}
+			fileFound = false;
+			if(fileFieldOk && fileIdText.isNumber() && filePathOk)
+			{
+				if(fileFieldOk)
+				{
+					if(fileReport == "All_Delivery_Notes")
+					{
+						fileDnCount = Delivery_Note[ID == fileIdText.toLong()].count();
+						fileFound = fileDnCount > 0;
+					}
+					else if(fileReport == "Purchase_Receive_Report")
+					{
+						filePrCount = Purchase_Receive[ID == fileIdText.toLong()].count();
+						fileFound = filePrCount > 0;
+					}
+					else if(fileReport == "All_Projects")
+					{
+						fileProjCount = Project[ID == fileIdText.toLong()].count();
+						fileFound = fileProjCount > 0;
+					}
+					else
+					{
+						fileTaskCount = Task_File[ID == fileIdText.toLong()].count();
+						fileFound = fileTaskCount > 0;
+					}
+				}
+			}
+			if(!fileFound)
+			{
+				rows = null;
+			}
+			else
+			{
+				fileHeaders = Map();
+				fileHeaders.put("environment","development");
+				fileUrl = "https://www.zohoapis.com/creator/v2.1/data/2point0concepts/point0concepts/report/" + fileReport + "/" + fileIdText + "/" + fileField + "/download";
+				if(filePathText != "")
+				{
+					fileUrl = fileUrl + "?filepath=" + zoho.encryption.urlEncode(filePathText);
+				}
+				fileObj = invokeurl
+				[
+					url :fileUrl
+					type :GET
+					headers:fileHeaders
+					connection:"zoho_creator"
+				];
+				rows.add({"Name":filePathText,"Content":zoho.encryption.base64Encode(fileObj)});
 			}
 		}
 		else

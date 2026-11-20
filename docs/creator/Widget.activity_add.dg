@@ -1,68 +1,132 @@
-// Widget.activity_add(string project_id, string module, string record_id, string record_name, map before, map after)
-// Writes one Activity_Stream record per field whose text changed (before → after). An empty "before" = the record was
-// created: one "created" line. Returns the number of lines written. No Custom API.
-// Called by project_update, project_task_update, project_risk_save and the optional Edit workflows (docs/ACTIVITY_STREAM.md).
 int Widget.activity_add(string project_id, string module, string record_id, string record_name, map before, map after)
 {
 	written = 0;
-	pid = 0;
-	if(project_id.isNumber())
+	try
 	{
-		pid = project_id.toLong();
-	}
-	actUser = Users[Email == zoho.loginuserid];
-	userName = zoho.loginuser;
-	if(actUser.count() > 0)
-	{
-		if(ifnull(actUser.Name,"") != "")
+		pid = "";
+		if(project_id.isNumber())
 		{
-			userName = actUser.Name;
+			pid = project_id;
 		}
-	}
-	if(before.size() == 0)
-	{
-		insert into Activity_Stream
-		[
-			Added_User=zoho.loginuser
-			Project=pid
-			Module=module
-			Record_ID=record_id
-			Record_Name=record_name
-			Action_field="created"
-			Field_Name=""
-			Old_Value=""
-			New_Value=""
-			Changed_By=userName
-			Changed_On=zoho.currentdate
-		]
-		written = 1;
-	}
-	else
-	{
-		for each  label in after.keys()
+		projCount = 0;
+		if(pid != "")
 		{
-			oldText = ifnull(before.get(label),"").toString().trim();
-			newText = ifnull(after.get(label),"").toString().trim();
-			// labels missing from "before" are not compared (Edit workflows send only the fields they track)
-			if(before.containKey(label) && oldText != newText)
+			projCount = Project[ID == pid.toLong()].count();
+		}
+		moduleList = {"Project","Milestone","Task","BOQ","Risk","Asset"};
+		actModule = ifnull(module,"").trim();
+		if(!moduleList.contains(actModule))
+		{
+			actModule = "Project";
+		}
+		actUser = Users[Email == zoho.loginuserid];
+		userName = zoho.loginuser;
+		if(actUser.count() > 0)
+		{
+			if(ifnull(actUser.Name,"") != "")
 			{
-				insert into Activity_Stream
-				[
-					Added_User=zoho.loginuser
-					Project=pid
-					Module=module
-					Record_ID=record_id
-					Record_Name=record_name
-					Action_field="updated"
-					Field_Name=label
-					Old_Value=oldText
-					New_Value=newText
-					Changed_By=userName
-					Changed_On=zoho.currentdate
-				]
-				written = written + 1;
+				userName = actUser.Name;
 			}
 		}
+		userName = userName.toString();
+		if(userName.length() > 255)
+		{
+			userName = userName.subString(0,255);
+		}
+		lineList = List();
+		if(before.size() == 0)
+		{
+			lineList.add({"Action_field":"created","Field_Name":"","Old_Value":"","New_Value":""});
+		}
+		else
+		{
+			for each  label in after.keys()
+			{
+				oldText = ifnull(before.get(label),"").toString().trim();
+				newText = ifnull(after.get(label),"").toString().trim();
+				if(before.containKey(label) && oldText != newText)
+				{
+					lineList.add({"Action_field":"updated","Field_Name":label,"Old_Value":oldText,"New_Value":newText});
+				}
+			}
+		}
+		if(projCount == 0)
+		{
+			info "Activity not written: no project for " + actModule + " " + record_id;
+		}
+		else if(lineList.size() > 0)
+		{
+			logRec = Activity_Stream[Project == pid.toLong() && Record_ID == "LOG"];
+			if(logRec.count() == 0)
+			{
+				projRef = ifnull(Project[ID == pid.toLong()].Project_Reference,"").toString();
+				if(projRef.length() > 255)
+				{
+					projRef = projRef.subString(0,255);
+				}
+				logId = insert into Activity_Stream
+				[
+					Added_User=zoho.loginuser
+					Project=pid.toLong()
+					Module="Project"
+					Record_ID="LOG"
+					Record_Name=projRef
+					Action_field="Activity log"
+					Changed_By=userName
+					Changed_On=zoho.currentdate
+				];
+				logRec = Activity_Stream[ID == logId];
+			}
+			actName = ifnull(record_name,"").toString().trim();
+			if(actName.length() > 255)
+			{
+				actName = actName.subString(0,255);
+			}
+			actRecordId = ifnull(record_id,"").toString().trim();
+			if(actRecordId.length() > 50)
+			{
+				actRecordId = actRecordId.subString(0,50);
+			}
+			actRows = Collection();
+			for each  lineEntry in lineList
+			{
+				fieldText = lineEntry.get("Field_Name").toString();
+				if(fieldText.length() > 255)
+				{
+					fieldText = fieldText.subString(0,255);
+				}
+				oldValue = lineEntry.get("Old_Value").toString();
+				if(oldValue.length() > 2000)
+				{
+					oldValue = oldValue.subString(0,2000);
+				}
+				newValue = lineEntry.get("New_Value").toString();
+				if(newValue.length() > 2000)
+				{
+					newValue = newValue.subString(0,2000);
+				}
+				actRow = Activity_Stream.Activity_data();
+				actRow.Activity_Module=actModule;
+				actRow.Activity_Record_ID=actRecordId;
+				actRow.Activity_Record_Name=actName;
+				actRow.Activity_Action=lineEntry.get("Action_field");
+				actRow.Activity_Field=fieldText;
+				actRow.Activity_Old_Value=oldValue;
+				actRow.Activity_New_Value=newValue;
+				actRow.Activity_By=userName;
+				actRow.Activity_On=zoho.currenttime;
+				actRows.insert(actRow);
+				written = written + 1;
+			}
+			logRec.Activity_data.insert(actRows);
+			logRec.Changed_By=userName;
+			logRec.Changed_On=zoho.currentdate;
+		}
+	}
+	catch (e)
+	{
+		info "Activity_Stream not written: " + e;
+		written = 0;
 	}
 	return written;
 }

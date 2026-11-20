@@ -1,0 +1,68 @@
+			Activity_data
+			(
+				type = grid
+				displayname = "Activity data"
+				Activity_Module
+				(
+					type = picklist
+					displayname = "Module"
+					maxchar = 100
+					values = {"Project","Milestone","Task","BOQ","Risk","Asset"}
+					width = medium
+				)
+				Activity_Record_ID
+				(
+					type = text
+					displayname = "Record ID"
+					width = medium
+				)
+				Activity_Record_Name
+				(
+					type = text
+					displayname = "Record Name"
+					width = medium
+				)
+				Activity_Action
+				(
+					type = text
+					displayname = "Action"
+					width = medium
+				)
+				Activity_Field
+				(
+					type = text
+					displayname = "Field"
+					width = medium
+				)
+				Activity_Old_Value
+				(
+					type = textarea
+					displayname = "Old Value"
+					height = 100px
+					width = medium
+				)
+				Activity_New_Value
+				(
+					type = textarea
+					displayname = "New Value"
+					height = 100px
+					width = medium
+				)
+				Activity_By
+				(
+					type = text
+					displayname = "Changed By"
+					width = medium
+				)
+				Activity_On
+				(
+					type = datetime
+					displayname = "Changed On"
+					timedisplayoptions = "hh:mm:ss"
+					alloweddays = 0,1,2,3,4,5,6
+					width = medium
+				)
+				row = 2
+				column = 1
+				width = medium
+			)

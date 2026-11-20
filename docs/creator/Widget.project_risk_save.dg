@@ -1,10 +1,3 @@
-// Widget.project_risk_save(string quo_data) — create / edit a Project_Risk record (Risk Register).
-// Custom API: Widget_Project_Risk_Save (POST, quo_data).
-// quo_data: {"project_id", "risk_id" (empty = create), "data":{"Risk_ID","Risk_Description","Cause","Probability","Impact",
-//            "Priority","Risk_Status","Risk_Owner","Department"}}  — only the fields to save; lookups as record IDs ("" = clear).
-// Risk_Score and Risk_Severity are always calculated here (workbook Risk Register formulas): score = probability × impact
-// (1–25), severity = the workbook's probability / impact table. Probability and Impact are mandatory (form "must have").
-// Created / changed risks are written to Activity_Stream.
 map Widget.project_risk_save(string quo_data)
 {
 	response = Map();
@@ -45,7 +38,6 @@ map Widget.project_risk_save(string quo_data)
 		matrix.put("Medium",{"Negligible":"Low","Minor":"Medium","Moderate":"Medium","Significant":"High","Severe":"Critical"});
 		matrix.put("Low",{"Negligible":"Very Low","Minor":"Low","Moderate":"Medium","Significant":"High","Severe":"High"});
 		matrix.put("Very Low",{"Negligible":"Very Low","Minor":"Low","Moderate":"Low","Significant":"Medium","Severe":"High"});
-		// Probability / Impact: new value, else the stored one (edit)
 		probability = "";
 		impact = "";
 		if(riskRec.count() > 0)
@@ -75,7 +67,6 @@ map Widget.project_risk_save(string quo_data)
 		{
 			errors.add("Priority must be High, Medium or Low");
 		}
-		// Lookups must point to existing records (Risk_Status: Status with Modules "Project Risk")
 		statusText = ifnull(data.get("Risk_Status"),"").toString();
 		if(statusText != "")
 		{
@@ -117,10 +108,11 @@ map Widget.project_risk_save(string quo_data)
 			{
 				before = thisapp.Widget.activity_values("Risk",riskRec.ID.toString());
 			}
-			severity = matrix.get(probability).get(impact);
+			severityRow = matrix.get(probability);
+			severity = severityRow.get(impact);
+			apiError = "";
 			if(riskRec.count() == 0)
 			{
-				// Risk ID like the workbook ("R - n"): next number in this project unless one is typed
 				nextNo = 1;
 				for each  otherRisk in Project_Risk[Project_Name == pid]
 				{
@@ -130,75 +122,143 @@ map Widget.project_risk_save(string quo_data)
 						nextNo = otherNo.trim().toLong() + 1;
 					}
 				}
-				newId = insert into Project_Risk
+				newRiskId = "R - " + nextNo;
+				if(data.containKey("Risk_ID") && ifnull(data.get("Risk_ID"),"").toString().trim() != "")
+				{
+					newRiskId = data.get("Risk_ID").toString().trim();
+				}
+				else
+				{
+					autoRiskNo = ifnull(thisapp.Creator.AutoGenerateNo("Risk"),"").toString().trim();
+					if(autoRiskNo != "")
+					{
+						newRiskId = autoRiskNo;
+					}
+				}
+				apiBase = "https://www.zohoapis.com/creator/v2.1/data/2point0concepts/point0concepts";
+				apiHeaders = Map();
+				apiHeaders.put("environment","development");
+				riskData = Map();
+				riskData.put("Project_Name",pid.toString());
+				riskData.put("Probability",probability);
+				riskData.put("Impact",impact);
+				riskData.put("Impact1",impact);
+				riskData.put("Risk_Score",score);
+				riskData.put("Risk_Severity",severity);
+				riskData.put("Risk_ID",newRiskId);
+				riskData.put("Risk_Description",ifnull(data.get("Risk_Description"),"").toString());
+				riskData.put("Cause",ifnull(data.get("Cause"),"").toString());
+				if(priority != "")
+				{
+					riskData.put("Priority",priority);
+				}
+				if(statusText != "")
+				{
+					riskData.put("Risk_Status",statusText);
+				}
+				if(ownerText != "")
+				{
+					riskData.put("Risk_Owner",ownerText);
+				}
+				if(departmentText != "")
+				{
+					riskData.put("Department",departmentText);
+				}
+				bodyMap = Map();
+				bodyMap.put("data",riskData);
+				apiResp = invokeurl
 				[
-					Added_User=zoho.loginuser
-					Project_Name=pid
-					Probability=probability
-					Impact=impact
-					Impact1=impact
-					Risk_ID="R - " + nextNo
+					url :apiBase + "/form/Project_Risk"
+					type :POST
+					parameters:bodyMap.toString()
+					headers:apiHeaders
+					connection:"zoho_creator"
 				];
-				riskRec = Project_Risk[ID == newId];
-			}
-			riskRec.Probability=probability;
-			riskRec.Impact=impact;
-			// DS 10: Impact1 ("Impact", must have) mirrors Impact
-			riskRec.Impact1=impact;
-			riskRec.Risk_Score=score;
-			riskRec.Risk_Severity=severity;
-			if(data.containKey("Risk_ID") && ifnull(data.get("Risk_ID"),"").toString().trim() != "")
-			{
-				riskRec.Risk_ID=data.get("Risk_ID").toString().trim();
-			}
-			if(data.containKey("Risk_Description"))
-			{
-				riskRec.Risk_Description=ifnull(data.get("Risk_Description"),"").toString();
-			}
-			if(data.containKey("Cause"))
-			{
-				riskRec.Cause=ifnull(data.get("Cause"),"").toString();
-			}
-			if(data.containKey("Priority"))
-			{
-				riskRec.Priority=priority;
-			}
-			if(data.containKey("Risk_Status"))
-			{
-				if(statusText == "")
+				if(ifnull(apiResp.get("code"),"").toString() == "3000")
 				{
-					riskRec.Risk_Status=null;
+					apiData = apiResp.get("data");
+					riskRec = Project_Risk[ID == apiData.get("ID").toString().toLong()];
 				}
 				else
 				{
-					riskRec.Risk_Status=statusText.toLong();
+					apiError = ifnull(apiResp.get("error"),"").toString();
+					if(apiError == "")
+					{
+						apiError = ifnull(apiResp.get("message"),"").toString();
+					}
+					if(apiError == "")
+					{
+						apiError = apiResp.toString();
+					}
 				}
 			}
-			if(data.containKey("Risk_Owner"))
+			else
 			{
-				if(ownerText == "")
+				riskRec.Probability=probability;
+				riskRec.Impact=impact;
+				riskRec.Impact1=impact;
+				riskRec.Risk_Score=score;
+				riskRec.Risk_Severity=severity;
+				if(data.containKey("Risk_ID") && ifnull(data.get("Risk_ID"),"").toString().trim() != "")
 				{
-					riskRec.Risk_Owner=null;
+					riskRec.Risk_ID=data.get("Risk_ID").toString().trim();
 				}
-				else
+				if(data.containKey("Risk_Description"))
 				{
-					riskRec.Risk_Owner=ownerText.toLong();
+					riskRec.Risk_Description=ifnull(data.get("Risk_Description"),"").toString();
+				}
+				if(data.containKey("Cause"))
+				{
+					riskRec.Cause=ifnull(data.get("Cause"),"").toString();
+				}
+				if(data.containKey("Priority"))
+				{
+					riskRec.Priority=priority;
+				}
+				if(data.containKey("Risk_Status"))
+				{
+					if(statusText == "")
+					{
+						riskRec.Risk_Status=null;
+					}
+					else
+					{
+						riskRec.Risk_Status=statusText.toLong();
+					}
+				}
+				if(data.containKey("Risk_Owner"))
+				{
+					if(ownerText == "")
+					{
+						riskRec.Risk_Owner=null;
+					}
+					else
+					{
+						riskRec.Risk_Owner=ownerText.toLong();
+					}
+				}
+				if(data.containKey("Department"))
+				{
+					if(departmentText == "")
+					{
+						riskRec.Department=null;
+					}
+					else
+					{
+						riskRec.Department=departmentText.toLong();
+					}
 				}
 			}
-			if(data.containKey("Department"))
+			if(riskRec.count() == 0)
 			{
-				if(departmentText == "")
-				{
-					riskRec.Department=null;
-				}
-				else
-				{
-					riskRec.Department=departmentText.toLong();
-				}
+				response = {"status":"error","code":"API","message":"Creator did not save the risk: " + apiError};
 			}
-			riskName = ifnull(riskRec.Risk_ID,"") + " " + ifnull(riskRec.Risk_Description,"");
-			thisapp.Widget.activity_add(pid.toString(),"Risk",riskRec.ID.toString(),riskName.trim(),before,thisapp.Widget.activity_values("Risk",riskRec.ID.toString()));
-			response = {"status":"success","ID":riskRec.ID.toString(),"Risk_ID":ifnull(riskRec.Risk_ID,""),"Risk_Score":score,"Risk_Severity":severity};
+			else
+			{
+				riskName = ifnull(riskRec.Risk_ID,"") + " " + ifnull(riskRec.Risk_Description,"");
+				thisapp.Widget.activity_add(pid.toString(),"Risk",riskRec.ID.toString(),riskName.trim(),before,thisapp.Widget.activity_values("Risk",riskRec.ID.toString()));
+				response = {"status":"success","ID":riskRec.ID.toString(),"Risk_ID":ifnull(riskRec.Risk_ID,""),"Risk_Score":score,"Risk_Severity":severity};
+			}
 		}
 	}
 	catch (e)
